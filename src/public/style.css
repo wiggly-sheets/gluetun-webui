@@ -233,6 +233,21 @@ main {
 .dot.paused       { background: var(--yellow); }
 .dot.disconnected { background: var(--red); }
 .dot.unknown      { background: var(--muted); }
+.dot.latency-good { background: var(--green); }
+.dot.latency-warn { background: var(--yellow); }
+.dot.latency-bad  { background: var(--red); }
+
+/* ---- Latency chart ---- */
+.latency-chart-wrapper {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin-bottom: 0.5rem;
+  padding-bottom: 2px;
+}
+.latency-chart { min-height: 64px; }
+.latency-chart svg { height: 64px; }
+.latency-chart rect { cursor: default; transition: opacity 0.15s; }
+.latency-chart rect:hover { opacity: 1 !important; }
 
 /* ---- Instance tabs ---- */
 .instance-tabs {
