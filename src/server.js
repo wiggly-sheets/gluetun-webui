@@ -105,7 +105,11 @@ const uiLimiter = rateLimit({
   message: 'Too many requests for the web UI, please try again later.',
 });
 
-app.use('/api/', (req, res, next) => req.method === 'GET' ? readLimiter(req, res, next) : next());
+app.use('/api/', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  if (req.method === 'GET') return readLimiter(req, res, next);
+  next();
+});
 
 // Security headers
 app.use((req, res, next) => {
@@ -115,6 +119,22 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
+// --- Host header allowlist (DNS rebinding protection) ---
+// No-auth local UI: a malicious site could DNS-rebind to 127.0.0.1 and drive
+// the VPN controls. Allow only known hosts. Extend via ALLOWED_HOSTS env
+// (comma-separated) when accessing via LAN IP or a reverse-proxy domain.
+const allowedHosts = new Set(
+  (process.env.ALLOWED_HOSTS || 'localhost,127.0.0.1,[::1]')
+    .split(',').map(h => h.trim().toLowerCase()).filter(Boolean)
+);
+app.use((req, res, next) => {
+  let host;
+  try { host = new URL(`http://${req.headers.host}`).hostname.toLowerCase(); }
+  catch (_) { return res.status(400).json({ ok: false, error: 'Bad request' }); }
+  if (!allowedHosts.has(host)) return res.status(403).json({ ok: false, error: 'Forbidden' });
   next();
 });
 
@@ -252,7 +272,7 @@ const vpnActionLimiter = rateLimit({
 });
 
 // --- Per-instance VPN control ---
-app.put('/api/:instanceId/vpn/:action', vpnActionLimiter, express.json({ limit: '2kb' }), async (req, res) => {
+app.put('/api/:instanceId/vpn/:action', vpnActionLimiter, async (req, res) => {
   const instance = resolveInstance(req.params.instanceId);
   if (!instance) return res.status(400).json({ ok: false, error: 'Unknown instance ID' });
   const { action } = req.params;
@@ -275,7 +295,7 @@ app.put('/api/:instanceId/vpn/:action', vpnActionLimiter, express.json({ limit: 
 });
 
 // --- Legacy VPN control (instance 1) ---
-app.put('/api/vpn/:action', vpnActionLimiter, express.json({ limit: '2kb' }), async (req, res) => {
+app.put('/api/vpn/:action', vpnActionLimiter, async (req, res) => {
   const { action } = req.params;
   const allowed = ['start', 'stop'];
   if (!allowed.includes(action)) {
@@ -306,7 +326,8 @@ app.get('/{*splat}', uiLimiter, (req, res) => {
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error('[error]', err.message);
-  res.status(500).json({ ok: false, error: 'Internal server error' });
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ ok: false, error: status >= 500 ? 'Internal server error' : err.message });
 });
 
 // Only listen when run directly (not when imported for testing)

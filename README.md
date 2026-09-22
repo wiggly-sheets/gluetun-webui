@@ -264,6 +264,7 @@ Each instance can have different authentication:
 | `GLUETUN_PASSWORD` | _(empty)_ | **Legacy** – Password for HTTP Basic auth |
 | `PORT` | `3000` | Port the web UI listens on |
 | `TRUST_PROXY` | `false` | Set to `true` if running behind a reverse proxy (nginx, Traefik, etc.) |
+| `ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | Comma-separated host allowlist for the Host header (DNS rebinding protection). Set it when accessing via LAN IP or a reverse-proxy domain, e.g. `ALLOWED_HOSTS=vpn.example.com`. |
 
 ---
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 
-process.env.GLUETUN_1_URL = 'http://localhost:9999';
+process.env.GLUETUN_1_URL = 'http://127.0.0.1:1';
 process.env.GLUETUN_1_NAME = 'Test Instance';
 
 let app;
@@ -69,5 +69,17 @@ describe('SPA catch-all', () => {
     const res = await request(app).get('/some/path');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/html/);
+  });
+});
+
+describe('Host header validation (DNS rebinding)', () => {
+  it('rejects unknown Host', async () => {
+    const res = await request(app).get('/api/instances').set('Host', 'evil.example.com');
+    expect(res.status).toBe(403);
+  });
+
+  it('allows localhost Host', async () => {
+    const res = await request(app).get('/api/instances').set('Host', 'localhost:3000');
+    expect(res.status).toBe(200);
   });
 });

@@ -1,6 +1,6 @@
 # Code Review Findings
 
-> Last reviewed: 2026-07-24 (pass 5)  
+> Last reviewed: 2026-09-22 (pass 6)  
 > Scope: security, correctness, reliability, code quality  
 > Status key: 🔴 High · 🟡 Medium · 🔵 Low · ✅ Fixed
 
@@ -18,6 +18,7 @@ _No open bugs._
 |---|---|---|---|
 | S-05 | 🔵 Low | `src/server.js` | **No `Strict-Transport-Security` (HSTS) header.** Intentionally omitted for plain-HTTP local use. Must be added if the app is ever placed behind an HTTPS reverse proxy. |
 | S-06 | 🔵 Low | `src/server.js` | **Rate limiter uses in-memory store.** Counters reset on every container restart. Acceptable for single-instance home use; note for any production or shared deployment. Also: if `TRUST_PROXY=false` (default) and the app is deployed behind a reverse proxy, `req.ip` collapses to the proxy IP, causing all clients to share one rate-limit bucket. Document that `TRUST_PROXY=true` is required when behind a proxy for per-client rate limiting. |
+| ~~S-09~~ | 🔴 High | ~~src/server.js~~ | ~~No Host-header validation — DNS rebinding lets any website drive the no-auth VPN controls.~~ — Fixed in pass 6 (allowlist middleware, default localhost/127.0.0.1/[::1], extendable via ALLOWED_HOSTS). |
 | ~~S-08~~ | 🔵 Low | ~~No graceful shutdown handler~~ — Fixed in pass 5 (graceful shutdown with 5s forced-exit) |
 
 ### Code Quality / Correctness
@@ -35,12 +36,28 @@ _No open bugs._
 | ~~C-11~~ | 🔵 Low | ~~`buildDashboardGroup` injects `id` without escaping~~ — Fixed in pass 5 (added numeric regex validation) |
 | ~~C-12~~ | 🔵 Low | ~~No type-check on `/api/instances` response~~ — Fixed in pass 5 (added `Array.isArray()` guard) |
 | ~~N-03~~ | 🔵 Low | ~~`<button>` elements missing `type="button"`~~ — Fixed in pass 5 (added `type="button"` everywhere) |
+| C-13 | 🔵 Low | `src/server.js` | `express.json()` registered on PUT routes but no route reads req.body — removed in pass 6 |
+| C-14 | 🔵 Low | `src/server.js` | Global error handler flattened body-parser 400/413 to 500 — now respects err.status/err.statusCode |
+| C-15 | 🔵 Low | `src/server.js` | No Cache-Control on /api/* — browsers may heuristically cache GETs; added no-store in pass 6 |
+| C-16 | 🔵 Low | `test/server.test.js` | Test used localhost:9999 (collision risk) — switched to 127.0.0.1:1 |
 
 ### Infrastructure / Docker
 
 | # | Severity | File | Finding |
 |---|---|---|---|
 | ~~D-01~~ | 🔵 Low | ~~No resource limits~~ — Fixed in pass 5 (added `deploy.resources.limits`: 128M memory, 0.50 CPUs) |
+
+---
+
+## Fixed Findings (pass 6 — 2026-09-22)
+
+| # | Severity | Finding |
+|---|---|---|
+| S-09 | 🔴 High | Host-header allowlist middleware added (DNS rebinding protection). Default `localhost,127.0.0.1,[::1]`, extendable via `ALLOWED_HOSTS` env. |
+| C-13 | 🔵 Low | Removed dead `express.json()` from PUT routes (no route reads a body). |
+| C-14 | 🔵 Low | Global error handler now respects `err.status`/`err.statusCode` (400/413 no longer flattened to 500). |
+| C-15 | 🔵 Low | Added `Cache-Control: no-store` to all `/api/*` responses. |
+| C-16 | 🔵 Low | Test upstream URL switched from `localhost:9999` to `127.0.0.1:1` (no collision). |
 
 ---
 
@@ -121,9 +138,8 @@ _No remaining findings._ All original open findings are now fixed or documented 
 
 **Intentionally open:**
 - **S-05** — HSTS omitted for plain-HTTP local use. Add if behind HTTPS reverse proxy.
-- **S-06** — In-memory rate limiter resets on restart. Acceptable for single-instance home use.
-11. **D-01** — Add container resource limits to `docker-compose.yml`
-12. **C-03** — Plan Express 5 migration (review changelog for breaking changes first)
+- **S-06** — In-memory rate limiter resets on restart. Acceptable for single-instance home use. `TRUST_PROXY=true` required behind a proxy for per-client limiting.
+- **S-09** — Host allowlist defaults to localhost only; set `ALLOWED_HOSTS` when accessing via LAN IP or reverse-proxy domain.
 
 ---
 
