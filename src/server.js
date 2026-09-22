@@ -2,6 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY === 'true');
@@ -72,6 +73,74 @@ function parseInstances() {
 const instances = parseInstances();
 const instanceMap = new Map(instances.map(inst => [inst.id, inst]));
 
+// --- Optional Web UI authentication ---
+// Opt-in: enabled only when BOTH WEBUI_USER and WEBUI_PASSWORD are set (env var or Docker secret webui_user/webui_password).
+// Sessions are an HMAC-signed cookie derived from the password (no extra config; a password change invalidates all sessions).
+const webuiUser     = getConfigValue('WEBUI_USER', 'webui_user');
+const webuiPassword = getConfigValue('WEBUI_PASSWORD', 'webui_password');
+if (Boolean(webuiUser) !== Boolean(webuiPassword)) {
+  console.error('[startup] Misconfiguration: WEBUI_USER and WEBUI_PASSWORD must be set together to enable authentication');
+  process.exit(1);
+}
+const authEnabled = Boolean(webuiUser && webuiPassword);
+const SESSION_COOKIE = 'webui_session';
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const sessionSigningKey = crypto.createHash('sha256').update(webuiPassword).digest();
+// In-memory version, bumped on logout so already-issued cookies are rejected
+// (stateless HMAC cookies would otherwise stay valid until expiry).
+let sessionVersion = 0;
+
+function signSessionPayload(payloadB64) {
+  return crypto.createHmac('sha256', sessionSigningKey).update(payloadB64).digest('base64url');
+}
+
+function createSessionCookie(username) {
+  const payloadB64 = Buffer.from(JSON.stringify({ u: username, e: Date.now() + SESSION_TTL_MS, v: sessionVersion })).toString('base64url');
+  return `${payloadB64}.${signSessionPayload(payloadB64)}`;
+}
+
+function verifySessionCookie(value) {
+  if (typeof value !== 'string') return false;
+  const dot = value.indexOf('.');
+  if (dot <= 0) return false;
+  const payloadB64 = value.slice(0, dot);
+  const signature = value.slice(dot + 1);
+  const sigBuf = Buffer.from(signature, 'base64url');
+  const expBuf = Buffer.from(signSessionPayload(payloadB64), 'base64url');
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return false;
+  try {
+    const { u, e, v } = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
+    return u === webuiUser && typeof e === 'number' && e > Date.now() && v === sessionVersion;
+  } catch (_) { return false; }
+}
+
+function getSessionCookie(req) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  const match = header.split(';').map(s => s.trim()).find(s => s.startsWith(`${SESSION_COOKIE}=`));
+  return match ? match.slice(SESSION_COOKIE.length + 1) : null;
+}
+
+function sessionCookieOptions(req) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
+    maxAge: SESSION_TTL_MS,
+    path: '/',
+  };
+}
+
+// Protects /api/* except login (public), auth (how the SPA learns whether to show
+// the login view) and healthz (Docker HEALTHCHECK).
+// When auth is disabled this is a no-op pass-through.
+function requireAuth(req, res, next) {
+  if (!authEnabled) return next();
+  if (['/login', '/auth', '/healthz'].includes(req.path)) return next();
+  if (verifySessionCookie(getSessionCookie(req))) return next();
+  res.status(401).json({ error: 'Unauthorized' });
+}
+
 function buildAuthHeadersFor(instance) {
   if (instance.apiKey) {
     return { 'X-API-Key': instance.apiKey };
@@ -104,6 +173,9 @@ const uiLimiter = rateLimit({
   legacyHeaders: false,
   message: 'Too many requests for the web UI, please try again later.',
 });
+
+// Auth must run before the /api/ rate limiters and routes
+app.use('/api/', requireAuth);
 
 app.use('/api/', (req, res, next) => req.method === 'GET' ? readLimiter(req, res, next) : next());
 
@@ -306,6 +378,46 @@ app.put('/api/vpn/:action', vpnActionLimiter, async (req, res) => {
   }
 });
 
+// --- Web UI authentication routes ---
+
+const loginLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many requests, please try again later.' },
+});
+
+app.post('/api/login', loginLimiter, async (req, res) => {
+  if (!authEnabled) return res.status(404).json({ ok: false, error: 'Not found' });
+  const { username, password } = req.body || {};
+  // Compare sha256 digests so timingSafeEqual sees equal-length buffers
+  const digest = (s) => crypto.createHash('sha256').update(String(s ?? '')).digest();
+  const userMatch = crypto.timingSafeEqual(digest(username), digest(webuiUser));
+  const passMatch = crypto.timingSafeEqual(digest(password), digest(webuiPassword));
+  if (userMatch && passMatch) {
+    res.cookie(SESSION_COOKIE, createSessionCookie(webuiUser), sessionCookieOptions(req));
+    return res.json({ ok: true });
+  }
+  res.status(401).json({ ok: false, error: 'Invalid username or password' });
+});
+
+app.post('/api/logout', (req, res) => {
+  sessionVersion++; // invalidate all previously issued cookies
+  res.clearCookie(SESSION_COOKIE, { path: '/' });
+  res.json({ ok: true });
+});
+
+app.get('/api/auth', (req, res) => {
+  const authenticated = !authEnabled || verifySessionCookie(getSessionCookie(req));
+  res.json({ authenticated });
+});
+
+// Public health endpoint for Docker HEALTHCHECK – always reachable, no sensitive data
+app.get('/api/healthz', (req, res) => {
+  res.json({ ok: true });
+});
+
 // 404 for undefined /api/* routes – must come before SPA catch-all
 app.use('/api/', (req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
 
@@ -316,6 +428,12 @@ app.get('*', staticLimiter, (req, res) => {
 // Global error handler – catches synchronous throws and next(err) calls
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ ok: false, error: 'Invalid JSON body' });
+  }
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ ok: false, error: 'Request body too large' });
+  }
   console.error('[error]', err.message);
   res.status(500).json({ ok: false, error: 'Internal server error' });
 });

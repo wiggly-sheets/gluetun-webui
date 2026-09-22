@@ -98,7 +98,7 @@ gluetun-webui:
   cap_drop:
     - ALL
   healthcheck:
-    test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+    test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]
     interval: 30s
     timeout: 5s
     start_period: 10s
@@ -264,6 +264,30 @@ Each instance can have different authentication:
 | `GLUETUN_PASSWORD` | _(empty)_ | **Legacy** – Password for HTTP Basic auth |
 | `PORT` | `3000` | Port the web UI listens on |
 | `TRUST_PROXY` | `false` | Set to `true` if running behind a reverse proxy (nginx, Traefik, etc.) |
+| `WEBUI_USER` | _(empty)_ | **Optional** – enable Web UI login (must set both `WEBUI_USER` and `WEBUI_PASSWORD`) |
+| `WEBUI_PASSWORD` | _(empty)_ | **Optional** – password for Web UI login (also sets the session signing key) |
+
+---
+
+## Web UI Authentication
+
+Authentication is **opt-in and disabled by default**. Set both `WEBUI_USER` and `WEBUI_PASSWORD` (as env vars or Docker secrets `webui_user` / `webui_password`) to require a login before the dashboard loads. If only one of the two is set, the app refuses to start.
+
+```yaml
+environment:
+  - WEBUI_USER=admin
+  - WEBUI_PASSWORD=mysecret
+```
+
+```yaml
+secrets:
+  - webui_user
+  - webui_password
+```
+
+When enabled, all `/api/*` routes except `POST /api/login`, `GET /api/auth`, and `GET /api/healthz` require a signed session cookie. Log in via the UI, or sign out with the **Log out** button in the header. Sessions last 7 days and are invalidated if the password changes. Logout invalidates sessions only until the server restarts, since the session version counter is kept in memory.
+
+> **Docker HEALTHCHECK:** use `http://localhost:3000/api/healthz` (public, no sensitive data) — `/api/health` is protected and returns 401 when auth is enabled.
 
 ---
 
