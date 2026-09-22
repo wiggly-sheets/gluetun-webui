@@ -86,6 +86,26 @@ select {
   cursor: pointer;
 }
 
+/* ---- Server selection dropdown ---- */
+.server-input-container {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.server-select {
+  max-width: 100%;
+  min-width: 10rem;
+}
+.server-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.server-select option,
+.server-select optgroup {
+  background: var(--surface2);
+  color: var(--text);
+}
+
 /* ---- Main ---- */
 main {
   /* layout handled by .dashboards-container */

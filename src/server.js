@@ -72,6 +72,10 @@ function parseInstances() {
 const instances = parseInstances();
 const instanceMap = new Map(instances.map(inst => [inst.id, inst]));
 
+// Server list cache: provider -> { fetchedAt, servers } (TTL 1h)
+const serversCache = new Map();
+const SERVERS_TTL = 60 * 60 * 1000;
+
 function buildAuthHeadersFor(instance) {
   if (instance.apiKey) {
     return { 'X-API-Key': instance.apiKey };
@@ -118,7 +122,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '2kb' }));
 app.use(uiLimiter, express.static(path.join(__dirname, 'public')));
 
 async function gluetunFetch(instance, endpoint, method = 'GET', body = null) {
@@ -265,6 +269,37 @@ app.put('/api/:instanceId/settings', async (req, res) => {
   }
 });
 
+// --- Per-instance server list (from gluetun-servers repo, cached 1h) ---
+app.get('/api/:instanceId/servers', async (req, res) => {
+  const instance = resolveInstance(req.params.instanceId);
+  if (!instance) return res.status(400).json({ ok: false, error: 'Unknown instance ID' });
+  const provider = (req.query.provider || '').trim().toLowerCase();
+  if (!provider) return res.status(400).json({ ok: false, error: 'Missing provider query param' });
+  if (!/^[a-z0-9_-]+$/.test(provider)) return res.status(400).json({ ok: false, error: 'Invalid provider' });
+  const cached = serversCache.get(provider);
+  if (cached && Date.now() - cached.fetchedAt < SERVERS_TTL) {
+    return res.json({ ok: true, data: cached.servers });
+  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const upstream = await fetch(
+      `https://raw.githubusercontent.com/qdm12/gluetun-servers/main/pkg/servers/${provider}.json`,
+      { signal: controller.signal }
+    );
+    if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
+    const data = await upstream.json();
+    if (!Array.isArray(data.servers)) throw new Error('Malformed server list');
+    serversCache.set(provider, { fetchedAt: Date.now(), servers: data.servers });
+    res.json({ ok: true, data: data.servers });
+  } catch (err) {
+    console.error('[servers]', err.message);
+    res.status(502).json({ ok: false, error: 'Could not fetch server list' });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+});
+
 app.get('/api/dns', async (req, res) => {
   try {
     const data = await gluetunFetch(instances[0], '/v1/dns/status');
@@ -347,6 +382,12 @@ app.get('*', staticLimiter, (req, res) => {
 // Global error handler – catches synchronous throws and next(err) calls
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ ok: false, error: 'Invalid JSON body' });
+  }
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ ok: false, error: 'Request body too large' });
+  }
   console.error('[error]', err.message);
   res.status(500).json({ ok: false, error: 'Internal server error' });
 });
