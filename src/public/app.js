@@ -124,7 +124,15 @@ function loadPlotly(onLoad) {
   document.head.appendChild(s);
 }
 
+// Containers already handed to Plotly. The lazy-load transition may leave the SVG chart
+// in the container; Plotly inserts (not replaces) its plot div, so the first render must clear.
+const plotlyRendered = new WeakSet();
+
 function renderPlotlyChartFor(container, hist) {
+  if (!plotlyRendered.has(container)) {
+    container.innerHTML = '';
+    plotlyRendered.add(container);
+  }
   const x = hist.map((_, i) => i);
   // 50 = the SVG renderer's minimum bar (4px on a 64px chart, scaled to the [0,800] axis); every bar gets at least this
   const y = hist.map(ms => ms === null ? 50 : Math.max(50, ms));
