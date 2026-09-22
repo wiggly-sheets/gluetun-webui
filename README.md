@@ -200,6 +200,11 @@ Per-provider server cards show live data about the server you are connected to. 
 | AirVPN | Rich card | Health, load, bandwidth, users, location, session transfer/speed (requires `AIRVPN_API_KEY`) |
 | NordVPN | Generic card | Server name, location, load |
 | Mullvad | Generic card | Server name, location, owned status, account expiry (with `MULLVAD_ACCOUNT_NUMBER`) |
+| IVPN | Generic card | Server name, location, load |
+| PIA | Generic card | Server name, location, port forwarding status |
+| Windscribe | Generic card | Server name, location |
+| Surfshark | Auth card | Server name, location, load, subscription expiry (requires `SURFSHARK_USER` + `SURFSHARK_PASSWORD`) |
+| ProtonVPN | Auth card | Server name, location, load (requires `PROTONVPN_USER` + `PROTONVPN_PASSWORD`) |
 | PrivadoVPN | Generic card | Server name, location, load |
 
 The generic card appears for any instance whose Gluetun provider is registered and disappears when the connected server cannot be matched (renamed/removed server) or the provider list is unreachable. More providers can be added incrementally by registering an adapter in `src/provider-integrations.js` — no frontend changes are needed for generic cards.
@@ -281,6 +286,8 @@ Each instance can have different authentication:
 | `GLUETUN_{N}_AIRVPN_API_KEY` | _(empty)_ | AirVPN API key for server status & port forwarding (also settable globally via `AIRVPN_API_KEY`) |
 | `AIRVPN_API_KEY` | _(empty)_ | **Global** AirVPN API key used across all instances unless overridden per-instance |
 | `MULLVAD_ACCOUNT_NUMBER` | _(empty)_ | Mullvad account number; when set, the Mullvad provider card also shows the account expiry date |
+| `SURFSHARK_USER` / `SURFSHARK_PASSWORD` | _(empty)_ | Optional — Surfshark account credentials. Only needed for the Surfshark provider card (server name, location, load, subscription expiry); without them no Surfshark card is shown and no network calls are made |
+| `PROTONVPN_USER` / `PROTONVPN_PASSWORD` | _(empty)_ | Optional — ProtonVPN account credentials. Only needed for the ProtonVPN provider card (server name, location, load); without them no ProtonVPN card is shown and no network calls are made. Accounts with two-factor authentication (2FA) enabled are not supported |
 | `FORWARDED_PORT` | _(empty)_ | **Global** forwarded port shown when Gluetun reports 0 (AirVPN doesn't write to its status file) |
 | `GLUETUN_{N}_FORWARDED_PORT` | _(empty)_ | Per-instance forwarded port, overrides `FORWARDED_PORT` |
 | `GLUETUN_CONTROL_URL` | `http://gluetun:8000` | **Legacy** – single instance only (fallback if no `GLUETUN_1_*` vars) |

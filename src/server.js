@@ -1,25 +1,13 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const fs = require('fs');
 const { providerIntegrations } = require('./provider-integrations');
+const { getConfigValue } = require('./config');
 
 const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY === 'true');
 app.disable('x-powered-by');
 const PORT = process.env.PORT || 3000;
-
-// --- Docker Secrets Support ---
-// Try to read from /run/secrets/ (Docker Swarm/Compose secrets), fall back to env vars
-function getConfigValue(envVar, secretName = null) {
-  const secretPath = `/run/secrets/${secretName || envVar.toLowerCase()}`;
-  try {
-    if (fs.existsSync(secretPath)) {
-      return fs.readFileSync(secretPath, 'utf8').trim();
-    }
-  } catch (_) {}
-  return process.env[envVar] || '';
-}
 
 // --- Multi-instance configuration ---
 // Define multiple gluetun instances via numbered env vars:
