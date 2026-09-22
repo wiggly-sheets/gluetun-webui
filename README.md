@@ -264,6 +264,8 @@ Each instance can have different authentication:
 | `GLUETUN_{N}_SECONDARY_PUBLIC_IP` | _(empty)_ | Secondary public IP address (e.g. IPv6 if Gluetun reports IPv4). When set alongside `IP_DISPLAY_MODE=auto`, both IPs display stacked |
 | `GLUETUN_{N}_AIRVPN_API_KEY` | _(empty)_ | AirVPN API key for server status & port forwarding (also settable globally via `AIRVPN_API_KEY`) |
 | `AIRVPN_API_KEY` | _(empty)_ | **Global** AirVPN API key used across all instances unless overridden per-instance |
+| `FORWARDED_PORT` | _(empty)_ | **Global** forwarded port shown when Gluetun reports 0 (AirVPN doesn't write to its status file) |
+| `GLUETUN_{N}_FORWARDED_PORT` | _(empty)_ | Per-instance forwarded port, overrides `FORWARDED_PORT` |
 | `GLUETUN_CONTROL_URL` | `http://gluetun:8000` | **Legacy** – single instance only (fallback if no `GLUETUN_1_*` vars) |
 | `GLUETUN_API_KEY` | _(empty)_ | **Legacy** – Bearer token for single instance |
 | `GLUETUN_USER` | _(empty)_ | **Legacy** – Username for HTTP Basic auth |

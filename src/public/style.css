@@ -154,6 +154,11 @@ main {
 }
 .card-wide { grid-column: 1 / -1; }
 
+/* ---- AirVPN card ---- */
+.airvpn-card { display: none; }
+.airvpn-card.visible { display: block; }
+.airvpn-card .badge { margin-left: auto; }
+
 /* ---- Cards ---- */
 .card {
   background: var(--surface);

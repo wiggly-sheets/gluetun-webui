@@ -6,7 +6,6 @@ const VALID_STATES = new Set(['connected', 'paused', 'disconnected', 'unknown'])
 let instances    = [];   // [{ id, name }] from /api/instances
 let isPolling    = false;
 let refreshTimer = null;
-const instanceSettings = new Map();
 
 // ---- Utility ----
 
@@ -151,11 +150,11 @@ function buildDashboardGroup(inst) {
       </div>
 
       <!-- AirVPN server card -->
-      <div class="card card-wide airvpn-card" id="i${id}-airvpn-card" style="display:none">
+      <div class="card card-wide airvpn-card" id="i${id}-airvpn-card">
         <div class="card-header">
           <span class="card-icon">&#127758;</span>
           <h3>AirVPN Server</h3>
-          <span id="i${id}-airvpn-server-name" class="badge ok" style="margin-left:auto"></span>
+          <span id="i${id}-airvpn-server-name" class="badge ok"></span>
         </div>
         <div class="card-body">
           <div class="stat-row"><span class="stat-label">Health</span><span class="stat-value" id="i${id}-airvpn-health">–</span></div>
@@ -245,15 +244,8 @@ function updatePanel(inst, health) {
   // --- AirVPN server info ---
   updateAirVpnPanel(id, health);
 
-   // Store the VPN settings for later use in server changes
-   if (s) {
-        instanceSettings.set(id, s);
-   } else {
-        instanceSettings.delete(id);
-   }
-
-   pushHistoryFor(id, state);
-   renderHistoryFor(id);
+  pushHistoryFor(id, state);
+  renderHistoryFor(id);
 }
 
 function updateAirVpnPanel(id, health) {
@@ -262,10 +254,10 @@ function updateAirVpnPanel(id, health) {
   if (!card) return;
 
   if (!airVpnServer?.ok || airVpnServer?.data == null) {
-    card.style.display = 'none';
+    card.classList.remove('visible');
     return;
   }
-  card.style.display = '';
+  card.classList.add('visible');
 
   const s = airVpnServer.data;
   setEl(`i${id}-airvpn-server-name`, s.public_name || '–');
@@ -291,86 +283,42 @@ function updateAirVpnPanel(id, health) {
     const spdW = conn.speed_write || 0;
     setEl(`i${id}-airvpn-speed`, `${formatBytes(spdR)}/s ↑ / ${formatBytes(spdW)}/s ↓`);
     setEl(`i${id}-airvpn-connected`, conn.connected_since_date || '–');
+  } else {
+    setEl(`i${id}-airvpn-transfer`, '–');
+    setEl(`i${id}-airvpn-speed`, '–');
+    setEl(`i${id}-airvpn-connected`, '–');
   }
 }
 
 function formatBytes(b) {
-  if (b === 0) return '0 B';
+  if (b < 1) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(b) / Math.log(1024));
   return `${(b / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
 function updatePanelError(inst) {
-   const id = inst.id;
-   const banner = document.getElementById(`i${id}-banner`);
-   if (banner) banner.className = 'status-banner unknown';
-   setEl(`i${id}-banner-title`, 'Status Unknown');
-   setEl(`i${id}-banner-sub`, 'Could not reach Gluetun control API');
-   setEl(`i${id}-ip-address`, '–');
-   setEl(`i${id}-ip-country`, '–');
-   setEl(`i${id}-ip-city`, '–');
-   setEl(`i${id}-ip-org`, '–');
-   setEl(`i${id}-vpn-status`, '–');
-   setEl(`i${id}-vpn-provider`, '–');
-   setEl(`i${id}-vpn-server`, '–');
-   setEl(`i${id}-vpn-protocol`, '–');
-   setEl(`i${id}-vpn-country`, '–');
-   setEl(`i${id}-vpn-city`, '–');
-   setEl(`i${id}-port-number`, 'N/A');
-setEl(`i${id}-dns-status`, 'Unavailable');
-    pushHistoryFor(id, 'unknown');
-    renderHistoryFor(id);
-    instanceSettings.delete(id);
-    const airCard = document.getElementById(`i${id}-airvpn-card`);
-    if (airCard) airCard.style.display = 'none';
-}
-
-// Update server for a specific instance
-async function updateServerForInstance(instanceId, newServer) {
-   const settings = instanceSettings.get(instanceId);
-   if (!settings) {
-        showToast('Unable to retrieve settings for instance', 'error');
-        return;
-   }
-   const vpn = settings.VPN;
-   if (!vpn) {
-        showToast('VPN settings not found', 'error');
-        return;
-   }
-// Create a copy of the VPN object with updated server selection
-   const updatedVPN = {
-        ...vpn,
-        Provider: {
-            ...vpn.Provider,
-            ServerSelection: {
-                ...vpn.Provider.ServerSelection,
-                Method: 'manual',
-                ServerSelection: newServer
-            }
-        }
-   };
-   try {
-        const res = await fetch(`/api/${instanceId}/settings`, {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(updatedVPN)
-        });
-        if (!res.ok) {
-            const errorText = await res.text();
-            throw new Error(`HTTP ${res.status}: ${errorText}`);
-        }
-        showToast('Server updated successfully', 'success');
-        // Optionally, we can trigger a refresh to get the new server name from the settings
-        // But note: the server name in the UI comes from the health data, which will be updated on the next poll.
-        // We can also update the UI optimistically if we want.
-        // For now, we rely on the next poll to update the server display.
-   } catch (err) {
-        console.error('[updateServer]', err.message);
-        showToast(`Failed to update server: ${err.message}`, 'error');
-   }
+  const id = inst.id;
+  const banner = document.getElementById(`i${id}-banner`);
+  if (banner) banner.className = 'status-banner unknown';
+  setEl(`i${id}-banner-title`, 'Status Unknown');
+  setEl(`i${id}-banner-sub`, 'Could not reach Gluetun control API');
+  setEl(`i${id}-ip-address`, '–');
+  setEl(`i${id}-ip-country`, '–');
+  setEl(`i${id}-ip-city`, '–');
+  setEl(`i${id}-ip-org`, '–');
+  setEl(`i${id}-vpn-status`, '–');
+  setEl(`i${id}-vpn-provider`, '–');
+  setEl(`i${id}-vpn-server`, '–');
+  setEl(`i${id}-vpn-protocol`, '–');
+  setEl(`i${id}-vpn-country`, '–');
+  setEl(`i${id}-vpn-city`, '–');
+  setEl(`i${id}-port-number`, 'N/A');
+  setEl(`i${id}-dns-status`, 'Unavailable');
+  pushHistoryFor(id, 'unknown');
+  renderHistoryFor(id);
+  const airCard = document.getElementById(`i${id}-airvpn-card`);
+  if (airCard) airCard.classList.remove('visible');
 }
 
 // ---- API ----
