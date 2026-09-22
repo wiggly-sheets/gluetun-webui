@@ -2,6 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
+const { providerIntegrations } = require('./provider-integrations');
 
 const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY === 'true');
@@ -192,9 +193,18 @@ async function airVpnFetch(apiKey, service, ttlMs = 120000) {
 // --- Helper: aggregate health for one instance ---
 // Returns { timestamp, vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings, allFailed }
 // allFailed = true if ALL 5 checks failed (service is completely unreachable)
+
+// instanceId -> lowercased gluetun provider name, learned from vpnSettings each successful poll.
+// The provider adapter fetch for a poll is gated on the *previous* poll's provider, so the
+// first poll of each instance has no provider fetch (card appears from the second poll).
+// ponytail: never evicts — max 20 instances, one string each; a stale entry only matters if
+// an instance ID is removed and later reused by a different provider. Delete on removal if that ever happens.
+const instanceProviderCache = new Map();
+
 async function fetchInstanceHealth(instance) {
   const hasAirVpn = Boolean(instance.airVpnApiKey);
-  // All upstream fetches in one parallel batch: gluetun (5s timeout) + AirVPN status/userinfo (4s timeout)
+  const adapter = providerIntegrations[instanceProviderCache.get(instance.id)] || null;
+  // All upstream fetches in one parallel batch: gluetun (5s timeout) + AirVPN status/userinfo (4s timeout) + provider list (4s/15s timeout)
   const results = await Promise.allSettled([
     gluetunFetch(instance, '/v1/vpn/status'),
     gluetunFetch(instance, '/v1/publicip/ip'),
@@ -203,14 +213,20 @@ async function fetchInstanceHealth(instance) {
     gluetunFetch(instance, '/v1/vpn/settings'),
     hasAirVpn ? airVpnFetch(instance.airVpnApiKey, 'status') : Promise.resolve(null),
     hasAirVpn ? airVpnFetch(instance.airVpnApiKey, 'userinfo') : Promise.resolve(null),
+    adapter ? adapter.fetchServerList() : Promise.resolve(null),
   ]);
   results.forEach((r, i) => {
-    if (r.status === 'rejected') console.error(`[${i < 5 ? 'upstream' : 'airvpn'}][${instance.id}]`, r.reason?.message);
+    if (r.status === 'rejected') console.error(`[${i < 5 ? 'upstream' : i < 7 ? 'airvpn' : 'provider'}][${instance.id}]`, r.reason?.message);
   });
-  const [vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings, airVpnStatus, airVpnUserinfo] = results.map(r =>
+  const [vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings, airVpnStatus, airVpnUserinfo, providerList] = results.map(r =>
     r.status === 'fulfilled' ? { ok: true, data: r.value } : { ok: false, error: 'Upstream error' }
   );
   const allFailed = [vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings].every(r => !r.ok);
+
+  // Learn the provider for the next poll
+  if (vpnSettings.ok && vpnSettings.data?.provider?.name) {
+    instanceProviderCache.set(instance.id, String(vpnSettings.data.provider.name).toLowerCase());
+  }
 
   // Merge env var forwarded port when Gluetun returns 0 (AirVPN doesn't write to status file)
   const envPort = Number(instance.forwardedPort);
@@ -244,11 +260,39 @@ async function fetchInstanceHealth(instance) {
     airVpnUserInfo = { connection: airVpnUserinfo.data?.connection ?? null };
   }
 
+  // Generic provider card: match the connected server against the provider's live list
+  let providerData = null;
+  if (adapter) {
+    if (!providerList.ok) {
+      providerData = { ok: false };
+    } else {
+      try {
+        // gluetun may store the display name or hostname in server_selection; the publicIp
+        // hostname (already fetched in the batch) is the actual connected server as a fallback.
+        // Hostnames are stable identifiers — try them first, since a display name can be
+        // reassigned to a different server by the provider.
+        const ss = vpnSettings.ok ? vpnSettings.data?.provider?.server_selection : null;
+        const candidates = [
+          ss?.hostnames?.[0],
+          ss?.names?.[0],
+          publicIp.ok ? publicIp.data?.hostname : null,
+        ].filter(Boolean);
+        const matched = candidates.length ? adapter.matchServer(providerList.data, candidates) : null;
+        const card = await adapter.buildCard(providerList.data, matched);
+        providerData = { ok: true, data: card || null };
+      } catch (err) {
+        console.error(`[provider][${instance.id}]`, err.message);
+        providerData = { ok: false };
+      }
+    }
+  }
+
   return {
     timestamp: new Date().toISOString(),
     vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings,
     airVpnServer: airVpnServer ? { ok: true, data: airVpnServer } : { ok: false },
     airVpnUserInfo: airVpnUserInfo ? { ok: true, data: airVpnUserInfo } : { ok: false },
+    providerData,
     allFailed,
   };
 }

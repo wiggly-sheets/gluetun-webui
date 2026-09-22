@@ -159,6 +159,11 @@ main {
 .airvpn-card.visible { display: block; }
 .airvpn-card .badge { margin-left: auto; }
 
+/* ---- Generic provider card (NordVPN / Mullvad / Privado) ---- */
+.provider-card { display: none; }
+.provider-card.visible { display: block; }
+.provider-card .badge { margin-left: auto; }
+
 /* ---- Cards ---- */
 .card {
   background: var(--surface);

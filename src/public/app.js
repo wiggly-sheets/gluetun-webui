@@ -167,6 +167,18 @@ function buildDashboardGroup(inst) {
           <div class="stat-row"><span class="stat-label">Connected</span><span class="stat-value" id="i${id}-airvpn-connected">–</span></div>
         </div>
       </div>
+      <!-- Generic provider card (NordVPN / Mullvad / Privado integrations) -->
+      <div class="card card-wide provider-card" id="i${id}-provider-card">
+        <div class="card-header">
+          <span class="card-icon">&#127760;</span>
+          <h3>Provider Server</h3>
+          <span id="i${id}-provider-server-name" class="badge ok"></span>
+        </div>
+        <div class="card-body" id="i${id}-provider-body">
+          <div class="stat-row"><span class="stat-label">Location</span><span class="stat-value" id="i${id}-provider-location">–</span></div>
+          <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value" id="i${id}-provider-load">–</span></div>
+        </div>
+      </div>
     </div>
   `;
   group.querySelector(`#i${id}-btn-start`).addEventListener('click', () => vpnAction(id, 'start'));
@@ -243,6 +255,7 @@ function updatePanel(inst, health) {
 
   // --- AirVPN server info ---
   updateAirVpnPanel(id, health);
+  updateProviderPanel(id, health.providerData);
 
   pushHistoryFor(id, state);
   renderHistoryFor(id);
@@ -290,6 +303,37 @@ function updateAirVpnPanel(id, health) {
   }
 }
 
+function updateProviderPanel(id, providerData) {
+  const card = document.getElementById(`i${id}-provider-card`);
+  if (!card) return;
+
+  if (!providerData?.ok || providerData.data == null) {
+    card.classList.remove('visible');
+    return;
+  }
+  card.classList.add('visible');
+
+  const d = providerData.data;
+  setEl(`i${id}-provider-server-name`, d.serverName || '–');
+  setEl(`i${id}-provider-location`, d.location || '–');
+  setEl(`i${id}-provider-load`, typeof d.load === 'number' ? `${d.load}%` : '–');
+
+  const body = document.getElementById(`i${id}-provider-body`);
+  body?.querySelectorAll('.provider-extra').forEach(el => el.remove());
+  (d.extra || []).forEach(row => {
+    const div = document.createElement('div');
+    div.className = 'stat-row provider-extra';
+    const label = document.createElement('span');
+    label.className = 'stat-label';
+    label.textContent = row.label;
+    const value = document.createElement('span');
+    value.className = 'stat-value';
+    value.textContent = row.value ?? '–';
+    div.append(label, value);
+    body.appendChild(div);
+  });
+}
+
 function formatBytes(b) {
   if (b < 1) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -319,6 +363,8 @@ function updatePanelError(inst) {
   renderHistoryFor(id);
   const airCard = document.getElementById(`i${id}-airvpn-card`);
   if (airCard) airCard.classList.remove('visible');
+  const provCard = document.getElementById(`i${id}-provider-card`);
+  if (provCard) provCard.classList.remove('visible');
 }
 
 // ---- API ----
