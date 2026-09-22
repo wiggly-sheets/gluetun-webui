@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "express": "^4.22.2",
-    "express-rate-limit": "^7.5.0"
+    "express-rate-limit": "^7.5.0",
+    "plotly.js-basic-dist-min": "^3.7.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

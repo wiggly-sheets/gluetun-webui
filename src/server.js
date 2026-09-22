@@ -8,6 +8,7 @@ app.set('trust proxy', process.env.TRUST_PROXY === 'true');
 app.disable('x-powered-by');
 const PORT = process.env.PORT || 3000;
 const LATENCY_CHART = process.env.LATENCY_CHART === 'true';
+const LATENCY_CHART_RENDERER = process.env.LATENCY_CHART_RENDERER === 'plotly' ? 'plotly' : 'svg';
 
 // --- Docker Secrets Support ---
 // Try to read from /run/secrets/ (Docker Swarm/Compose secrets), fall back to env vars
@@ -111,7 +112,7 @@ app.use('/api/', (req, res, next) => req.method === 'GET' ? readLimiter(req, res
 // Security headers
 app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy',
-    "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:");
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:");
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'no-referrer');
@@ -169,7 +170,7 @@ async function fetchInstanceHealth(instance) {
 
 // --- Feature config endpoint ---
 app.get('/api/config', (req, res) => {
-  res.json({ latencyChart: LATENCY_CHART });
+  res.json({ latencyChart: LATENCY_CHART, latencyChartRenderer: LATENCY_CHART_RENDERER });
 });
 
 // --- Instance list endpoint ---
@@ -311,6 +312,9 @@ app.put('/api/vpn/:action', vpnActionLimiter, async (req, res) => {
     res.status(502).json({ ok: false, error: 'Upstream error' });
   }
 });
+
+// Serve Plotly bundle
+app.use('/vendor/plotly', uiLimiter, express.static(path.join(__dirname, '..', 'node_modules', 'plotly.js-basic-dist-min')));
 
 // 404 for undefined /api/* routes – must come before SPA catch-all
 app.use('/api/', (req, res) => res.status(404).json({ ok: false, error: 'Not found' }));

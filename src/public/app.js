@@ -10,8 +10,18 @@ let instances    = [];   // [{ id, name }] from /api/instances
 let isPolling    = false;
 let refreshTimer = null;
 let latencyChartEnabled = false;
+let latencyChartRenderer = 'svg';
 const instanceSettings = new Map(); // id -> settings object (from /api/:instanceId/health vpnSettings.data)
 const latencyHistory   = new Map(); // id -> number[] (ms, newest last)
+
+// Plotly color vars – resolved once at module load (documentElement exists at parse time)
+const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const plotlyColorMap = {
+  'var(--green)': cssVar('--green'),
+  'var(--yellow)': cssVar('--yellow'),
+  'var(--red)': cssVar('--red'),
+  'var(--muted)': cssVar('--muted')
+};
 
 // ---- Utility ----
 
@@ -86,15 +96,7 @@ function latencyColor(ms) {
   return 'var(--red)';
 }
 
-function renderLatencyChartFor(id) {
-  const container = document.getElementById(`i${id}-latency-chart`);
-  if (!container) return;
-  const hist = latencyHistory.get(id) || [];
-  if (hist.length === 0) {
-    container.innerHTML = '';
-    return;
-  }
-
+function renderSvgChartFor(container, hist) {
   const W = container.clientWidth || 600;
   const H = 64;
   const BAR_GAP = 2;
@@ -113,6 +115,53 @@ function renderLatencyChartFor(id) {
   }).join('');
 
   container.innerHTML = `<svg width="${svgW}" height="${H}">${bars}</svg>`;
+}
+
+function renderPlotlyChartFor(container, hist) {
+  const x = hist.map((_, i) => i);
+  // 50 = the SVG renderer's minimum bar (4px on a 64px chart, scaled to the [0,800] axis); every bar gets at least this
+  const y = hist.map(ms => ms === null ? 50 : Math.max(50, ms));
+  const customdata = hist.map(ms => ms === null ? '–' : ms + 'ms');
+  const markerColor = hist.map(ms => {
+    const c = latencyColor(ms);
+    return plotlyColorMap[c] || '#64748b';
+  });
+  const data = [{
+    x: x,
+    y: y,
+    customdata: customdata,
+    marker: { color: markerColor },
+    hovertemplate: '%{customdata}<extra></extra>',
+    type: 'bar'
+  }];
+  const layout = {
+    height: 64,
+    margin: { t: 4, r: 4, b: 4, l: 30 },
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(0,0,0,0)',
+    font: { color: cssVar('--muted') || '#64748b', size: 10 },
+    xaxis: { showgrid: false, zeroline: false, showticklabels: false },
+    yaxis: { range: [0, MAX_LATENCY_DISPLAY_MS], showgrid: true, gridcolor: 'rgba(100,116,139,0.15)', zeroline: false },
+    bargap: 0.25
+  };
+  const config = { displayModeBar: false, responsive: true };
+  Plotly.react(container, data, layout, config);
+}
+
+function renderLatencyChartFor(id) {
+  const container = document.getElementById(`i${id}-latency-chart`);
+  if (!container) return;
+  const hist = latencyHistory.get(id) || [];
+  if (hist.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  if (latencyChartRenderer === 'plotly' && window.Plotly && window.Plotly.react) {
+    renderPlotlyChartFor(container, hist);
+  } else {
+    renderSvgChartFor(container, hist);
+  }
 
   const latest = hist[hist.length - 1];
   const statEl = document.getElementById(`i${id}-latency-stat`);
@@ -425,6 +474,7 @@ $('refresh-interval').addEventListener('change', applyAutoRefresh);
     if (cfgRes.ok) {
       const cfg = await cfgRes.json();
       latencyChartEnabled = cfg.latencyChart === true;
+      latencyChartRenderer = cfg.latencyChartRenderer === 'plotly' ? 'plotly' : 'svg';
     }
   } catch (_) {}
   try {

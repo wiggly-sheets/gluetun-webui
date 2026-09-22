@@ -21,6 +21,8 @@ services:
       #- TRUST_PROXY=false
       # Uncomment to enable the latency chart (poll round-trip time)
       #- LATENCY_CHART=false
+      # Latency chart renderer: 'svg' (default) or 'plotly'
+      #- LATENCY_CHART_RENDERER=svg
     
     networks:
       - gluetun-stack
