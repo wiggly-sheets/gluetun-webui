@@ -117,6 +117,13 @@ function renderSvgChartFor(container, hist) {
   container.innerHTML = `<svg width="${svgW}" height="${H}">${bars}</svg>`;
 }
 
+function loadPlotly(onLoad) {
+  const s = document.createElement('script');
+  s.src = '/vendor/plotly/plotly-basic.min.js';
+  s.onload = onLoad;
+  document.head.appendChild(s);
+}
+
 function renderPlotlyChartFor(container, hist) {
   const x = hist.map((_, i) => i);
   // 50 = the SVG renderer's minimum bar (4px on a 64px chart, scaled to the [0,800] axis); every bar gets at least this
@@ -475,6 +482,11 @@ $('refresh-interval').addEventListener('change', applyAutoRefresh);
       const cfg = await cfgRes.json();
       latencyChartEnabled = cfg.latencyChart === true;
       latencyChartRenderer = cfg.latencyChartRenderer === 'plotly' ? 'plotly' : 'svg';
+    }
+    if (latencyChartEnabled && latencyChartRenderer === 'plotly') {
+      loadPlotly(() => {
+        instances.forEach(inst => renderLatencyChartFor(inst.id));
+      });
     }
   } catch (_) {}
   try {
