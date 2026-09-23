@@ -322,7 +322,7 @@ function applyAutoRefresh() {
 // ---- Theme ----
 
 const THEMES = ['dark', 'light', 'auto'];
-const THEME_ICONS = { dark: '&#9790;', light: '&#9728;', auto: '&#9681;' };
+const THEME_ICONS = { dark: '☾', light: '☀', auto: '◉' };
 let currentTheme = 'dark';
 
 function applyTheme(theme) {
@@ -334,19 +334,25 @@ function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
   }
   const btn = $('theme-toggle');
-  if (btn) btn.innerHTML = THEME_ICONS[theme];
+  if (btn) {
+    btn.textContent = THEME_ICONS[theme];
+    const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+    btn.title = `Switch to ${next} theme`;
+    btn.setAttribute('aria-label', `Theme: ${theme}. Click to cycle.`);
+  }
 }
 
 function cycleTheme() {
   const idx = THEMES.indexOf(currentTheme);
   const next = THEMES[(idx + 1) % THEMES.length];
-  localStorage.setItem('gluetun_theme', next);
+  try { localStorage.setItem('gluetun_theme', next); } catch (_) {}
   applyTheme(next);
 }
 
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-  if (currentTheme === 'auto') applyTheme('auto');
-});
+const mq = window.matchMedia('(prefers-color-scheme: dark)');
+const onSchemeChange = () => { if (currentTheme === 'auto') applyTheme('auto'); };
+if (mq.addEventListener) mq.addEventListener('change', onSchemeChange);
+else mq.addListener(onSchemeChange);
 
 // ---- Init ----
 
@@ -358,7 +364,9 @@ $('refresh-interval').addEventListener('change', applyAutoRefresh);
 $('theme-toggle').addEventListener('click', cycleTheme);
 
 // Load saved theme
-applyTheme(localStorage.getItem('gluetun_theme') || 'dark');
+let savedTheme = 'dark';
+try { savedTheme = localStorage.getItem('gluetun_theme') || 'dark'; } catch (_) {}
+applyTheme(THEMES.includes(savedTheme) ? savedTheme : 'dark');
 
 (async () => {
   try {
