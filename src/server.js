@@ -120,7 +120,6 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '2kb' }));
 app.use(uiLimiter, express.static(path.join(__dirname, 'public')));
 
 async function gluetunFetch(instance, endpoint, method = 'GET', body = null) {
@@ -262,28 +261,6 @@ app.get('/api/publicip', async (req, res) => {
 app.get('/api/portforwarded', async (req, res) => {
   try {
     const data = await gluetunFetch(instances[0], '/v1/portforward');
-    res.json({ ok: true, data });
-  } catch (err) {
-    console.error('[upstream]', err.message);
-    res.status(502).json({ ok: false, error: 'Upstream error' });
-  }
-});
-
-app.get('/api/settings', async (req, res) => {
-  try {
-    const data = await gluetunFetch(instances[0], '/v1/vpn/settings');
-    res.json({ ok: true, data });
-  } catch (err) {
-    console.error('[upstream]', err.message);
-    res.status(502).json({ ok: false, error: 'Upstream error' });
-  }
-});
-
-app.get('/api/:instanceId/settings', async (req, res) => {
-  const instance = resolveInstance(req.params.instanceId);
-  if (!instance) return res.status(400).json({ ok: false, error: 'Unknown instance ID' });
-  try {
-    const data = await gluetunFetch(instance, '/v1/vpn/settings');
     res.json({ ok: true, data });
   } catch (err) {
     console.error('[upstream]', err.message);
