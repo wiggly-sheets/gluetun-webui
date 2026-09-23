@@ -44,6 +44,17 @@ _No open bugs._
 
 ---
 
+## IPv6 Review (2026-09-22)
+
+| # | Severity | Finding |
+|---|---|---|
+| V-01 | 🔴 High | IPv6 auto-detect ran on the webui container's egress (host IPv6, not VPN exit) and blocked every health poll up to 5s. Fixed: cached with 5-min TTL, background refresh, never blocks polling; README documents the `network_mode: service:gluetun` caveat. |
+| V-02 | 🔵 Low | `style="display:none"` inline attribute blocked by CSP `style-src 'self'` — secondary IP row flashed visible. Fixed: moved to `.secondary-ip-row { display: none }` stylesheet rule. |
+| V-03 | 🔵 Low | Dual-display branch logic had contradictory/unreachable paths ('single' mode showed both rows). Simplified to a single `showSecondary` decision. |
+| V-04 | 🔵 Low | Manual `SECONDARY_PUBLIC_IP` override removed — auto-detection is the only source; dual-stack shows automatically when the provider supplies IPv6. Cache now keeps the last good IPv6 on transient failure. |
+
+---
+
 ## Fixed Findings (resolved in this review cycle)
 
 <details>

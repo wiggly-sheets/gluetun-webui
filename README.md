@@ -43,7 +43,7 @@ A lightweight web UI for monitoring and controlling [Gluetun](https://github.com
 
 - ✨ **Multi-VPN Support** — Monitor & control up to 20 Gluetun instances simultaneously
 - Live VPN status banner (connected / paused / disconnected)
-- Public exit IP with **auto-detected IPv6** — shows both IPv4 and IPv6 when available, with manual fallback
+- Public exit IP with **auto-detected IPv6** — shows both IPv4 and IPv6 when available
 - VPN provider, protocol (WireGuard / OpenVPN), server details
 - Port forwarding and DNS status
 - Start / Stop VPN controls
@@ -260,13 +260,14 @@ Each instance can have different authentication:
 | `GLUETUN_{N}_USER` | _(empty)_ | Username for HTTP Basic auth (instance N) |
 | `GLUETUN_{N}_PASSWORD` | _(empty)_ | Password for HTTP Basic auth (instance N) |
 | `GLUETUN_{N}_IP_DISPLAY_MODE` | `auto` | IP display mode: `auto` (show both if IPv6 detected), `dual` (force both), or single IPv4 only |
-| `GLUETUN_{N}_SECONDARY_PUBLIC_IP` | _(empty)_ | Manual override for secondary IP (e.g. IPv6). Used when auto-detection fails. Typically not needed — see [IPv6 Setup](#ipv6-setup) |
 | `GLUETUN_CONTROL_URL` | `http://gluetun:8000` | **Legacy** – single instance only (fallback if no `GLUETUN_1_*` vars) |
 | `GLUETUN_API_KEY` | _(empty)_ | **Legacy** – Bearer token for single instance |
 | `GLUETUN_USER` | _(empty)_ | **Legacy** – Username for HTTP Basic auth |
 | `GLUETUN_PASSWORD` | _(empty)_ | **Legacy** – Password for HTTP Basic auth |
 | `PORT` | `3000` | Port the web UI listens on |
 | `TRUST_PROXY` | `false` | Set to `true` if running behind a reverse proxy (nginx, Traefik, etc.) |
+
+> **Note:** since Gluetun v3.39.1 the control server requires authentication by default. Set `HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE: '{"auth":"none"}'` on the gluetun service (as in the example compose file) or configure `/gluetun/auth/config.toml`, otherwise the web UI's `/v1/*` queries will be rejected.
 
 ---
 
@@ -331,6 +332,8 @@ Generate a hash with: `htpasswd -nb user password`
 ## IPv6 Setup
 
 The web UI **auto-detects** your public IPv6 address via an external service ([api6.ipify.org](https://api6.ipify.org)) and displays it alongside IPv4 when available. No configuration is needed on the web UI side — if Gluetun has IPv6 connectivity, the UI shows both addresses automatically.
+
+> **Network-path caveat:** the IPv6 is detected from the *web UI container's* egress, not Gluetun's tunnel. For the displayed IPv6 to be your VPN exit address, route the web UI through Gluetun (`network_mode: service:gluetun` on the webui service). Otherwise the UI shows the host's own IPv6 (or none). The result is cached for 5 minutes and never blocks dashboard polling.
 
 **However**, Docker containers don't have IPv6 by default. You must configure your Docker daemon and Gluetun for IPv6 to work. Without this, the UI will only show IPv4.
 
@@ -429,21 +432,12 @@ Public IP
 | Symptom | Fix |
 |---------|-----|
 | Only IPv4 shows in UI | Gluetun doesn't have IPv6 — check Steps 1–3 |
+| UI shows host IPv6 instead of VPN IPv6 | Web UI isn't routed through Gluetun — add `network_mode: service:gluetun` to the webui service |
 | `docker exec gluetun wget` returns "Network unreachable" | Docker daemon IPv6 not enabled or network missing `enable_ipv6: true` |
 | Gluetun won't start | Check `WIREGUARD_ADDRESSES` format — must be `ipv4/32,ipv6/128` (comma-separated, no spaces) |
 | IPv6 works but UI doesn't show it | Open browser devtools → Network tab → check `/api/1/health` response has `publicIpv6.ok: true` |
 
-### Manual Fallback
-
-If auto-detection fails (e.g. behind a restrictive proxy), you can manually set the IPv6 address:
-
-```yaml
-environment:
-  - GLUETUN_1_SECONDARY_PUBLIC_IP=2a0a:xxxx:xxxx::128
-  - GLUETUN_1_IP_DISPLAY_MODE=dual
-```
-
-This forces display of both addresses without relying on external detection.
+Dual-stack is shown automatically when the provider supplies IPv6 through the tunnel — no manual IP configuration is needed.
 
 ---
 

@@ -99,7 +99,7 @@ function buildDashboardGroup(inst) {
             <span class="stat-label" id="i${id}-ip-primary-label">Public IP</span>
             <span class="stat-value mono" id="i${id}-ip-address">–</span>
           </div>
-          <div class="stat-row secondary-ip-row" style="display:none">
+          <div class="stat-row secondary-ip-row">
             <span class="stat-label" id="i${id}-ip-secondary-label">Secondary IP</span>
             <span class="stat-value mono" id="i${id}-ip-secondary">–</span>
           </div>
@@ -204,40 +204,23 @@ function updatePanel(inst, health) {
 
   const primaryIp   = ip?.public_ip ?? ip?.ip ?? '';
   const autoIpv6    = health.publicIpv6?.ok ? health.publicIpv6.data?.ipv6 : null;
-  const secondaryIp = autoIpv6 || inst.secondaryPublicIp || '';
+  const secondaryIp = autoIpv6 || '';
   const displayMode = inst.ipDisplayMode || 'auto';
 
-  const useDualDisplay = (displayMode === 'auto' && secondaryIp) ||
-                          displayMode === 'dual';
+  // Show both rows in 'dual' mode, or in 'auto' when a secondary IP exists.
+  // Any other mode ('single') shows the primary row only, falling back to the
+  // secondary IP when no primary is available.
+  const showSecondary = displayMode === 'dual' || (displayMode === 'auto' && !!secondaryIp);
+  const primaryDisplay = showSecondary ? primaryIp : (primaryIp || secondaryIp);
+  const secondaryEl  = document.getElementById(`i${id}-ip-secondary`);
+  const secondaryRow = secondaryEl ? secondaryEl.closest('.stat-row') : null;
 
-  const primaryType   = ipTypeLabel(primaryIp);
-  const secondaryType = secondaryIp ? ipTypeLabel(secondaryIp) : '';
-
-  const primaryLabel  = useDualDisplay ? primaryType   : 'Public IP';
-  const secondaryLabel = useDualDisplay ? secondaryType : 'Secondary IP';
-  const secondaryEl    = document.getElementById(`i${id}-ip-secondary`);
-  const secondaryRow   = secondaryEl ? secondaryEl.closest('.stat-row') : null;
-
-  setEl(`i${id}-ip-primary-label`,   primaryLabel);
-  setEl(`i${id}-ip-address`,         primaryIp || '–');
-  setEl(`i${id}-ip-secondary-label`, secondaryLabel);
-
-  if (useDualDisplay) {
-    if (secondaryIp) {
-      setEl(`i${id}-ip-secondary`, secondaryIp);
-      if (secondaryRow) secondaryRow.style.display = '';
-    } else {
-      setEl(`i${id}-ip-secondary`, '–');
-      if (secondaryRow) secondaryRow.style.display = '';
-    }
-  } else if (secondaryIp && !primaryIp) {
-    setEl(`i${id}-ip-address`, secondaryIp);
-    if (secondaryRow) secondaryRow.style.display = 'none';
-  } else if (primaryIp && secondaryIp) {
-    setEl(`i${id}-ip-secondary`, secondaryIp);
-    if (secondaryRow) secondaryRow.style.display = '';
-  } else {
-    if (secondaryRow) secondaryRow.style.display = 'none';
+  setEl(`i${id}-ip-primary-label`, showSecondary ? ipTypeLabel(primaryIp) : 'Public IP');
+  setEl(`i${id}-ip-address`, primaryDisplay || '–');
+  if (secondaryRow) secondaryRow.style.display = showSecondary ? 'flex' : 'none';
+  if (showSecondary) {
+    setEl(`i${id}-ip-secondary-label`, secondaryIp ? ipTypeLabel(secondaryIp) : 'Secondary IP');
+    setEl(`i${id}-ip-secondary`, secondaryIp || '–');
   }
 
   const pubIpStr = primaryIp || '';
@@ -297,6 +280,7 @@ function updatePanelError(inst) {
   setEl(`i${id}-vpn-city`, '–');
   setEl(`i${id}-port-number`, 'N/A');
   setEl(`i${id}-dns-status`, 'Unavailable');
+  setEl(`i${id}-ip-secondary-label`, 'Secondary IP');
   const secondaryEl = document.getElementById(`i${id}-ip-secondary`);
   const secondaryRow = secondaryEl ? secondaryEl.closest('.stat-row') : null;
   if (secondaryRow) secondaryRow.style.display = 'none';

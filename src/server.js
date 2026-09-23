@@ -46,7 +46,6 @@ function parseInstances() {
       user:     getConfigValue(`GLUETUN_${i}_USER`, `gluetun_${i}_user`),
       password: getConfigValue(`GLUETUN_${i}_PASSWORD`, `gluetun_${i}_password`),
       ipDisplayMode:    getConfigValue(`GLUETUN_${i}_IP_DISPLAY_MODE`,    `gluetun_${i}_ip_display_mode`)    || 'auto',
-      secondaryPublicIp: getConfigValue(`GLUETUN_${i}_SECONDARY_PUBLIC_IP`, `gluetun_${i}_secondary_public_ip`) || '',
     });
   }
   if (list.length === 0) {
@@ -67,7 +66,6 @@ function parseInstances() {
       user:     getConfigValue('GLUETUN_USER', 'gluetun_user'),
       password: getConfigValue('GLUETUN_PASSWORD', 'gluetun_password'),
       ipDisplayMode:    getConfigValue('GLUETUN_IP_DISPLAY_MODE',    'gluetun_ip_display_mode')    || 'auto',
-      secondaryPublicIp: getConfigValue('GLUETUN_SECONDARY_PUBLIC_IP', 'gluetun_secondary_public_ip') || '',
     });
   }
   return list;
@@ -161,41 +159,60 @@ async function fetchInstanceHealth(instance) {
     gluetunFetch(instance, '/v1/portforward'),
     gluetunFetch(instance, '/v1/dns/status'),
     gluetunFetch(instance, '/v1/vpn/settings'),
-    fetchPublicIpv6(),
   ]);
   results.forEach(r => { if (r.status === 'rejected') console.error(`[upstream][${instance.id}]`, r.reason?.message); });
-  const [vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings, ipv6Result] = results.map(r =>
+  const [vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings] = results.map(r =>
     r.status === 'fulfilled' ? { ok: true, data: r.value } : { ok: false, error: 'Upstream error' }
   );
-  const publicIpv6 = ipv6Result?.ok && ipv6Result.data ? { ok: true, data: ipv6Result.data } : { ok: false, error: 'Not available' };
-  const allFailed = results.slice(0, 5).every(r => r.status === 'rejected');
+  const allFailed = results.every(r => r.status === 'rejected');
+  // IPv6 is refreshed in the background and cached (5 min TTL) — never blocks the health poll
+  const cachedIpv6 = ipv6Cache.value;
+  fetchPublicIpv6(); // fire-and-forget; result lands in the cache for the next poll
+  const publicIpv6 = cachedIpv6 ? { ok: true, data: cachedIpv6 } : { ok: false, error: 'Not available' };
   return { timestamp: new Date().toISOString(), vpnStatus, publicIp, publicIpv6, portForwarded, dnsStatus, vpnSettings, allFailed };
 }
 
-// --- Fetch public IPv6 from external service (best-effort, 5s timeout) ---
+// --- Public IPv6 (best-effort, cached, background refresh) ---
+// NOTE: detected from the webui container's egress, not Gluetun's tunnel.
+// Route the webui through Gluetun (network_mode: service:gluetun) for the
+// VPN exit IPv6; otherwise this is the host's own IPv6 (or none).
+const IPV6_CACHE_TTL_MS = 5 * 60 * 1000;
+let ipv6Cache = { value: null, fetchedAt: 0 };
+let ipv6InFlight = null;
+
 async function fetchPublicIpv6() {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
-  try {
-    const res = await fetch('https://api6.ipify.org?format=json', {
-      signal: controller.signal,
-      redirect: 'error',
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    // Only return if it's actually an IPv6 address
-    return data.ip && data.ip.includes(':') ? { ipv6: data.ip } : null;
-  } catch (_) {
-    return null;
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  if (Date.now() - ipv6Cache.fetchedAt < IPV6_CACHE_TTL_MS) return ipv6Cache.value;
+  if (ipv6InFlight) return ipv6InFlight;
+  ipv6InFlight = (async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetch('https://api6.ipify.org?format=json', {
+        signal: controller.signal,
+        redirect: 'error',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const value = data.ip && data.ip.includes(':') ? { ipv6: data.ip } : null;
+      ipv6Cache = { value, fetchedAt: Date.now() };
+      return value;
+    } catch (_) {
+      // Keep the last good value; only stamp the failure time when there's a
+      // value to keep, so a fresh detection isn't delayed after recovery
+      if (ipv6Cache.value) ipv6Cache = { value: ipv6Cache.value, fetchedAt: Date.now() };
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+      ipv6InFlight = null;
+    }
+  })();
+  return ipv6InFlight;
 }
 
 // --- Instance list endpoint ---
 app.get('/api/instances', (req, res) => {
-  res.json(instances.map(({ id, name, ipDisplayMode, secondaryPublicIp }) =>
-    ({ id, name, ipDisplayMode, secondaryPublicIp })
+  res.json(instances.map(({ id, name, ipDisplayMode }) =>
+    ({ id, name, ipDisplayMode })
   ));
 });
 
