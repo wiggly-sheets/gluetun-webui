@@ -325,17 +325,31 @@ function applyAutoRefresh() {
 const CARD_IDS = ['ip', 'vpn', 'port', 'dns', 'history'];
 let editMode = false;
 let dragSrcCard = null;
+const dragBoundGrids = new WeakSet();
 
 function layoutKey(instId) { return `gluetun_layout_${instId}`; }
 
 function defaultLayout() {
-  return { order: [...CARD_IDS], sizes: {}, hidden: [] };
+  return { order: [...CARD_IDS], sizes: { history: 4 }, hidden: [] };
+}
+
+function sanitizeLayout(raw) {
+  const valid = new Set(CARD_IDS);
+  const order = [...new Set((Array.isArray(raw.order) ? raw.order : []).filter(cid => valid.has(cid)))];
+  const hidden = [...new Set((Array.isArray(raw.hidden) ? raw.hidden : []).filter(cid => valid.has(cid)))];
+  const sizes = {};
+  const rawSizes = raw.sizes && typeof raw.sizes === 'object' && !Array.isArray(raw.sizes) ? raw.sizes : {};
+  CARD_IDS.forEach(cid => {
+    const n = Number(rawSizes[cid]);
+    sizes[cid] = Number.isFinite(n) && n > 0 ? Math.min(4, Math.max(1, Math.floor(n))) : 1;
+  });
+  return { order, hidden, sizes };
 }
 
 function loadLayout(instId) {
   try {
     const raw = JSON.parse(localStorage.getItem(layoutKey(instId)));
-    if (raw && Array.isArray(raw.order)) return raw;
+    if (raw && Array.isArray(raw.order)) return sanitizeLayout(raw);
   } catch (_) {}
   return defaultLayout();
 }
@@ -364,7 +378,8 @@ function applyLayout(instId) {
     const card = cards[cid];
     if (!card) return;
     const span = layout.sizes[cid] || 1;
-    card.style.gridColumn = span >= 4 ? '1 / -1' : `span ${span}`;
+    const numCols = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
+    card.style.gridColumn = span >= numCols ? '1 / -1' : `span ${span}`;
     // card-wide class is just for initial default, override with explicit span
     card.classList.toggle('card-wide', false);
   });
@@ -401,16 +416,15 @@ function applyLayoutUI(instId) {
     }
   });
 
-  // Drag events for reorder
+  // Drag events for reorder (delegated, attached once per grid)
   if (editMode) {
     const gridEl = document.getElementById(`i${instId}-grid`);
-    if (gridEl) {
-      gridEl.querySelectorAll('.card[data-card-id]').forEach(card => {
-        card.addEventListener('dragstart', onDragStart);
-        card.addEventListener('dragover', onDragOver);
-        card.addEventListener('drop', onDrop);
-        card.addEventListener('dragend', onDragEnd);
-      });
+    if (gridEl && !dragBoundGrids.has(gridEl)) {
+      dragBoundGrids.add(gridEl);
+      gridEl.addEventListener('dragstart', onDragStart);
+      gridEl.addEventListener('dragover', onDragOver);
+      gridEl.addEventListener('drop', onDrop);
+      gridEl.addEventListener('dragend', onDragEnd);
     }
   }
 
@@ -424,13 +438,16 @@ function startResize(e, instId, cid) {
   e.preventDefault();
   e.stopPropagation();
   const grid = document.getElementById(`i${instId}-grid`);
+  if (!grid) return;
   const card = grid.querySelector(`[data-card-id="${cid}"]`);
-  if (!grid || !card) return;
+  if (!card) return;
 
   const startX = e.clientX;
   const gridRect = grid.getBoundingClientRect();
+  const parentRect = grid.parentElement.getBoundingClientRect();
   const numCols = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
-  const colWidth = gridRect.width / numCols;
+  const gap = parseFloat(getComputedStyle(grid).columnGap) || 0;
+  const colWidth = (gridRect.width - gap * (numCols - 1)) / numCols;
   const startSpan = loadLayout(instId).sizes[cid] || 1;
 
   card.classList.add('resizing');
@@ -441,7 +458,7 @@ function startResize(e, instId, cid) {
   const overlay = document.createElement('div');
   overlay.className = 'grid-overlay';
   overlay.style.cssText = `
-    position:absolute; top:0; left:${gridRect.left - grid.parentElement.getBoundingClientRect().left}px;
+    position:absolute; top:${gridRect.top - parentRect.top}px; left:${gridRect.left - parentRect.left}px;
     width:${gridRect.width}px; height:${gridRect.height}px;
     display:flex; pointer-events:none; z-index:10;
   `;
@@ -470,6 +487,7 @@ function startResize(e, instId, cid) {
   function onUp() {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    window.removeEventListener('blur', onUp);
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     card.classList.remove('resizing');
@@ -483,29 +501,37 @@ function startResize(e, instId, cid) {
 
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
+  window.addEventListener('blur', onUp);
 }
 
 function onDragStart(e) {
-  dragSrcCard = this;
-  this.classList.add('dragging');
+  if (e.target.closest('.resize-handle')) return;
+  const card = e.target.closest('.card[data-card-id]');
+  if (!card) return;
+  dragSrcCard = card;
+  card.classList.add('dragging');
   e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', this.dataset.cardId);
+  e.dataTransfer.setData('text/plain', card.dataset.cardId);
 }
 
 function onDragOver(e) {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
-  this.classList.add('drag-over');
+  const card = e.target.closest('.card[data-card-id]');
+  if (card) card.classList.add('drag-over');
 }
 
 function onDrop(e) {
   e.preventDefault();
-  this.classList.remove('drag-over');
-  const instId = this.closest('.dashboard-group')?.id?.replace('dashboard-', '');
-  if (!instId || !dragSrcCard || dragSrcCard === this) return;
+  const card = e.target.closest('.card[data-card-id]');
+  if (!card) return;
+  card.classList.remove('drag-over');
+  const instId = card.closest('.dashboard-group')?.id?.replace('dashboard-', '');
+  if (!instId || !dragSrcCard || dragSrcCard === card) return;
+  if (dragSrcCard.closest('.dashboard-group') !== card.closest('.dashboard-group')) return;
   const layout = loadLayout(instId);
   const fromId = dragSrcCard.dataset.cardId;
-  const toId = this.dataset.cardId;
+  const toId = card.dataset.cardId;
   const fromIdx = layout.order.indexOf(fromId);
   const toIdx = layout.order.indexOf(toId);
   if (fromIdx === -1 || toIdx === -1) return;
@@ -515,8 +541,9 @@ function onDrop(e) {
   applyLayout(instId);
 }
 
-function onDragEnd() {
-  this.classList.remove('dragging');
+function onDragEnd(e) {
+  const card = e.target.closest('.card[data-card-id]');
+  if (card) card.classList.remove('dragging');
   document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
   dragSrcCard = null;
 }
@@ -566,7 +593,6 @@ function toggleEditMode() {
   document.querySelectorAll('.dashboard-group').forEach(group => {
     const instId = group.id.replace('dashboard-', '');
     applyLayout(instId);
-    applyLayoutUI(instId);
     const panel = document.getElementById(`i${instId}-visibility-panel`);
     if (panel) panel.style.display = editMode ? '' : 'none';
   });
