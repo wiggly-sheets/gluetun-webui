@@ -321,8 +321,8 @@ function applyAutoRefresh() {
 
 // ---- Speed Test ----
 
-let speedtestEnabled = false;
 let speedtestRunning = false;
+let speedtestResults = [];
 
 function buildSpeedtestCard() {
   const card = document.createElement('div');
@@ -337,6 +337,12 @@ function buildSpeedtestCard() {
       <div class="speedtest-controls">
         <button id="speedtest-run" class="btn-success">&#9654; Run Test</button>
         <span id="speedtest-status" class="muted"></span>
+        <select id="speedtest-range" class="muted">
+          <option value="5">Last 5</option>
+          <option value="10">Last 10</option>
+          <option value="20">Last 20</option>
+          <option value="0" selected>All</option>
+        </select>
       </div>
       <div id="speedtest-result" class="speedtest-result hidden">
         <div class="speedtest-stats">
@@ -357,19 +363,32 @@ function buildSpeedtestCard() {
             <span class="speedtest-stat-value mono" id="speedtest-server">–</span>
           </div>
         </div>
-        <div class="speedtest-chart-wrap">
-          <canvas id="speedtest-chart" width="400" height="80"></canvas>
+        <div class="speedtest-chart-wrap hidden">
+          <canvas id="speedtest-chart" width="400" height="120"></canvas>
         </div>
       </div>
     </div>
   `;
   card.querySelector('#speedtest-run').addEventListener('click', runSpeedtest);
+  card.querySelector('#speedtest-range').addEventListener('change', e => {
+    if (!speedtestResults.length) return;
+    const n = parseInt(e.target.value, 10);
+    renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
+  });
   return card;
 }
 
-function formatMbps(bitsPerSec) {
-  if (!bitsPerSec || bitsPerSec === 0) return '–';
-  return (bitsPerSec / 1000000).toFixed(1) + ' Mbps';
+function formatMbps(bytesPerSec) {
+  if (!bytesPerSec || bytesPerSec === 0) return '–';
+  return ((bytesPerSec * 8) / 1000000).toFixed(1) + ' Mbps';
+}
+
+function renderSpeedtestResult(data) {
+  setText('speedtest-dl', formatMbps(data.download));
+  setText('speedtest-ul', formatMbps(data.upload));
+  setText('speedtest-ping', data.ping ? data.ping.toFixed(0) + ' ms' : '–');
+  setText('speedtest-server', data.server || '–');
+  $('speedtest-result').classList.remove('hidden');
 }
 
 async function runSpeedtest() {
@@ -387,11 +406,7 @@ async function runSpeedtest() {
     clearTimeout(timeoutId);
     const data = await res.json();
     if (data.ok) {
-      document.getElementById('speedtest-dl').textContent = formatMbps(data.download);
-      document.getElementById('speedtest-ul').textContent = formatMbps(data.upload);
-      document.getElementById('speedtest-ping').textContent = data.ping ? data.ping.toFixed(0) + ' ms' : '–';
-      document.getElementById('speedtest-server').textContent = data.server || '–';
-      document.getElementById('speedtest-result').classList.remove('hidden');
+      renderSpeedtestResult(data);
       status.textContent = 'Completed';
       loadAndRenderSpeedtestChart();
     } else {
@@ -410,22 +425,57 @@ async function loadAndRenderSpeedtestChart() {
     const res = await fetch('/api/speedtest/history');
     const data = await res.json();
     if (!data.ok || !data.results.length) return;
-    renderSpeedtestChart(data.results);
+    speedtestResults = data.results;
+    const n = parseInt($('speedtest-range').value, 10);
+    renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
   } catch (_) {}
 }
 
 function renderSpeedtestChart(results) {
   const canvas = document.getElementById('speedtest-chart');
   if (!canvas) return;
+  const wrap = canvas.closest('.speedtest-chart-wrap');
+  if (results.length < 2) { wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
   const ctx = canvas.getContext('2d');
   const W = canvas.width = canvas.parentElement.clientWidth;
-  const H = canvas.height = 80;
+  const H = canvas.height = 120;
   ctx.clearRect(0, 0, W, H);
 
-  const dl = results.map(r => r.download / 1000000);
-  const ul = results.map(r => r.upload / 1000000);
+  const GUTTER = 60;
+  const plotW = W - GUTTER;
+  const dl = results.map(r => r.download * 8 / 1000000);
+  const ul = results.map(r => r.upload * 8 / 1000000);
   const maxVal = Math.max(...dl, ...ul, 1) * 1.15;
-  const step = results.length > 1 ? W / (results.length - 1) : W / 2;
+  const step = plotW / (results.length - 1);
+
+  // Gridlines and Y-axis labels
+  ctx.font = '11px system-ui';
+  ctx.strokeStyle = 'rgba(100,116,139,0.25)';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#64748b';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  const targetTicks = 5;
+  const rawStep = maxVal / targetTicks;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  const tickStep = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+  const ticks = [];
+  for (let v = 0; v <= maxVal; v += tickStep) ticks.push(v);
+  ticks.forEach((v, i) => {
+    const y = H - (v / maxVal) * (H - 10) - 5;
+    ctx.beginPath();
+    ctx.moveTo(GUTTER, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+    const labelV = Math.round(v * 100) / 100;
+    const num = labelV === 0 ? '0' : (labelV >= 10 ? Math.round(labelV) : labelV.toFixed(1));
+    const label = i === ticks.length - 1 ? num + ' Mbps' : num;
+    ctx.fillText(label, GUTTER - 4, y);
+  });
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 
   function drawLine(values, color) {
     ctx.beginPath();
@@ -433,11 +483,19 @@ function renderSpeedtestChart(results) {
     ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
     values.forEach((v, i) => {
-      const x = results.length === 1 ? W / 2 : i * step;
+      const x = GUTTER + i * step;
       const y = H - (v / maxVal) * (H - 10) - 5;
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
     ctx.stroke();
+    values.forEach((v, i) => {
+      const x = GUTTER + i * step;
+      const y = H - (v / maxVal) * (H - 10) - 5;
+      ctx.beginPath();
+      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    });
   }
 
   drawLine(dl, '#4ade80');
@@ -446,9 +504,9 @@ function renderSpeedtestChart(results) {
   // Legend
   ctx.font = '11px system-ui';
   ctx.fillStyle = '#4ade80';
-  ctx.fillText('↓ DL', 4, 12);
+  ctx.fillText('↓ DL', GUTTER + 4, 12);
   ctx.fillStyle = '#60a5fa';
-  ctx.fillText('↑ UL', 40, 12);
+  ctx.fillText('↑ UL', GUTTER + 40, 12);
   ctx.fillStyle = '#64748b';
   ctx.textAlign = 'right';
   ctx.fillText(results.length + ' tests', W - 4, 12);
@@ -459,26 +517,29 @@ async function initSpeedtest() {
   try {
     const res = await fetch('/api/speedtest/status');
     const data = await res.json();
-    speedtestEnabled = data.enabled;
-  } catch (_) {}
-  if (!speedtestEnabled) return;
+    const enabled = data.enabled;
+    if (!enabled) return;
+  } catch (_) { return; }
 
   const card = buildSpeedtestCard();
   const container = $('dashboards-container');
   container.appendChild(card);
+
+  window.addEventListener('resize', () => {
+    if (!speedtestResults.length) return;
+    const n = parseInt($('speedtest-range').value, 10);
+    renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
+  });
 
   // Load existing history
   try {
     const res = await fetch('/api/speedtest/history');
     const data = await res.json();
     if (data.ok && data.results.length) {
-      const last = data.results[data.results.length - 1];
-      document.getElementById('speedtest-dl').textContent = formatMbps(last.download);
-      document.getElementById('speedtest-ul').textContent = formatMbps(last.upload);
-      document.getElementById('speedtest-ping').textContent = last.ping ? last.ping.toFixed(0) + ' ms' : '–';
-      document.getElementById('speedtest-server').textContent = last.server || '–';
-      document.getElementById('speedtest-result').classList.remove('hidden');
-      renderSpeedtestChart(data.results);
+      speedtestResults = data.results;
+      renderSpeedtestResult(data.results[data.results.length - 1]);
+      const n = parseInt($('speedtest-range').value, 10);
+      renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
     }
   } catch (_) {}
 }

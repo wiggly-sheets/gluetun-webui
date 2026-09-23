@@ -341,7 +341,24 @@ gluetun-webui:
     - SPEEDTEST_ENABLED=true
 ```
 
-A "Speed Test" card appears with a **Run Test** button. Each test takes 15–30 seconds and measures download, upload, ping, and server. Results are charted over time (last 20 tests).
+A "Speed Test" card appears with a **Run Test** button. Each test takes 15–30 seconds and measures download, upload, ping, and server. Results are charted over time (last 20 tests). Use the dropdown on the card to show the last 5/10/20 tests or all.
+
+### Persistence
+
+Results persist across restarts in `SPEEDTEST_HISTORY_FILE` (default `/app/speedtest-history.json`). To keep history across container recreation, mount a volume at a path **other than `/app`** (that would shadow the app), e.g.:
+
+```yaml
+gluetun-webui:
+  environment:
+    - SPEEDTEST_HISTORY_FILE=/data/speedtest-history.json
+  volumes:
+    - speedtest-data:/data
+
+volumes:
+  speedtest-data:
+```
+
+Named volumes inherit the image's `/data` ownership; if you use a bind mount instead, ensure the host directory is writable by the container's non-root user (uid 100).
 
 ### Routing Through VPN
 
