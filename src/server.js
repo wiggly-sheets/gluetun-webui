@@ -185,7 +185,11 @@ const uiLimiter = rateLimit({
 // Auth must run before the /api/ rate limiters and routes
 app.use('/api/', requireAuth);
 
-app.use('/api/', (req, res, next) => req.method === 'GET' ? readLimiter(req, res, next) : next());
+app.use('/api/', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  if (req.method === 'GET') return readLimiter(req, res, next);
+  next();
+});
 
 // Security headers
 app.use((req, res, next) => {
@@ -195,6 +199,22 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
+// --- Host header allowlist (DNS rebinding protection) ---
+// No-auth local UI: a malicious site could DNS-rebind to 127.0.0.1 and drive
+// the VPN controls. Allow only known hosts. Extend via ALLOWED_HOSTS env
+// (comma-separated) when accessing via LAN IP or a reverse-proxy domain.
+const allowedHosts = new Set(
+  (process.env.ALLOWED_HOSTS || 'localhost,127.0.0.1,[::1]')
+    .split(',').map(h => h.trim().toLowerCase()).filter(Boolean)
+);
+app.use((req, res, next) => {
+  let host;
+  try { host = new URL(`http://${req.headers.host}`).hostname.toLowerCase(); }
+  catch (_) { return res.status(400).json({ ok: false, error: 'Bad request' }); }
+  if (!allowedHosts.has(host)) return res.status(403).json({ ok: false, error: 'Forbidden' });
   next();
 });
 
@@ -411,19 +431,9 @@ app.get('/api/dns', async (req, res) => {
   }
 });
 
-// VPN control actions
 const vpnActionLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { ok: false, error: 'Too many requests, please try again later.' },
-});
-
-// Rate limiting for SPA/static index route
-const staticLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 120,
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: 'Too many requests, please try again later.' },
@@ -519,7 +529,7 @@ app.get('/api/healthz', (req, res) => {
 // 404 for undefined /api/* routes – must come before SPA catch-all
 app.use('/api/', (req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
 
-app.get('*', staticLimiter, (req, res) => {
+app.get('/{*splat}', uiLimiter, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
@@ -533,10 +543,24 @@ app.use((err, req, res, next) => {
     return res.status(413).json({ ok: false, error: 'Request body too large' });
   }
   console.error('[error]', err.message);
-  res.status(500).json({ ok: false, error: 'Internal server error' });
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ ok: false, error: status >= 500 ? 'Internal server error' : err.message });
 });
 
-app.listen(PORT, () => {
-  console.log(`Gluetun Web UI running on port ${PORT}`);
-  instances.forEach(inst => console.log(`  [${inst.id}] ${inst.name} → ${inst.url}`));
-});
+// Only listen when run directly (not when imported for testing)
+if (require.main === module) {
+  const server = app.listen(PORT, () => {
+    console.log(`Gluetun Web UI running on port ${PORT}`);
+    instances.forEach(inst => console.log(`  [${inst.id}] ${inst.name} → ${inst.url}`));
+  });
+
+  function gracefulShutdown(signal) {
+    console.log(`\n[${signal}] Shutting down gracefully…`);
+    server.close(() => { console.log('Server closed.'); process.exit(0); });
+    setTimeout(() => process.exit(1), 5000);
+  }
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+}
+
+module.exports = { app, parseInstances, gluetunFetch };

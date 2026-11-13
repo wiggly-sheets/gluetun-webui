@@ -34,6 +34,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.50"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]
       interval: 30s
@@ -168,7 +173,12 @@ networks:
 #       - no-new-privileges:true
 #     cap_drop:
 #       - ALL
-# 
+#     deploy:
+#       resources:
+#         limits:
+#           memory: 128M
+#           cpus: "0.50"
+
 # networks:
 #   gluetun-stack:
 #     driver: bridge
