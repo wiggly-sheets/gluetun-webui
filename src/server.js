@@ -45,6 +45,8 @@ function parseInstances() {
       apiKey:   getConfigValue(`GLUETUN_${i}_API_KEY`, `gluetun_${i}_api_key`),
       user:     getConfigValue(`GLUETUN_${i}_USER`, `gluetun_${i}_user`),
       password: getConfigValue(`GLUETUN_${i}_PASSWORD`, `gluetun_${i}_password`),
+      ipDisplayMode:    getConfigValue(`GLUETUN_${i}_IP_DISPLAY_MODE`,    `gluetun_${i}_ip_display_mode`)    || 'auto',
+      secondaryPublicIp: getConfigValue(`GLUETUN_${i}_SECONDARY_PUBLIC_IP`, `gluetun_${i}_secondary_public_ip`) || '',
     });
   }
   if (list.length === 0) {
@@ -64,6 +66,8 @@ function parseInstances() {
       apiKey:   getConfigValue('GLUETUN_API_KEY', 'gluetun_api_key'),
       user:     getConfigValue('GLUETUN_USER', 'gluetun_user'),
       password: getConfigValue('GLUETUN_PASSWORD', 'gluetun_password'),
+      ipDisplayMode:    getConfigValue('GLUETUN_IP_DISPLAY_MODE',    'gluetun_ip_display_mode')    || 'auto',
+      secondaryPublicIp: getConfigValue('GLUETUN_SECONDARY_PUBLIC_IP', 'gluetun_secondary_public_ip') || '',
     });
   }
   return list;
@@ -168,7 +172,9 @@ async function fetchInstanceHealth(instance) {
 
 // --- Instance list endpoint ---
 app.get('/api/instances', (req, res) => {
-  res.json(instances.map(({ id, name }) => ({ id, name })));
+  res.json(instances.map(({ id, name, ipDisplayMode, secondaryPublicIp }) =>
+    ({ id, name, ipDisplayMode, secondaryPublicIp })
+  ));
 });
 
 // --- Per-instance health endpoint ---
@@ -227,6 +233,35 @@ app.get('/api/portforwarded', async (req, res) => {
 app.get('/api/settings', async (req, res) => {
   try {
     const data = await gluetunFetch(instances[0], '/v1/vpn/settings');
+    res.json({ ok: true, data });
+  } catch (err) {
+    console.error('[upstream]', err.message);
+    res.status(502).json({ ok: false, error: 'Upstream error' });
+  }
+});
+
+app.get('/api/:instanceId/settings', async (req, res) => {
+  const instance = resolveInstance(req.params.instanceId);
+  if (!instance) return res.status(400).json({ ok: false, error: 'Unknown instance ID' });
+  try {
+    const data = await gluetunFetch(instance, '/v1/vpn/settings');
+    res.json({ ok: true, data });
+  } catch (err) {
+    console.error('[upstream]', err.message);
+    res.status(502).json({ ok: false, error: 'Upstream error' });
+  }
+});
+
+app.put('/api/:instanceId/settings', async (req, res) => {
+  const instance = resolveInstance(req.params.instanceId);
+  if (!instance) return res.status(400).json({ ok: false, error: 'Unknown instance ID' });
+  try {
+    const data = await gluetunFetch(
+      instance,
+      '/v1/vpn/settings',
+      'PUT',
+      req.body
+    );
     res.json({ ok: true, data });
   } catch (err) {
     console.error('[upstream]', err.message);
