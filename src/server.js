@@ -761,4 +761,20 @@ app.use((err, req, res, next) => {
   res.status(status).json({ ok: false, error: status >= 500 ? 'Internal server error' : err.message });
 });
 
+// Only listen when run directly (not when imported for testing)
+if (require.main === module) {
+  const server = app.listen(PORT, () => {
+    console.log(`Gluetun Web UI running on port ${PORT}`);
+    instances.forEach(inst => console.log(`  [${inst.id}] ${inst.name} → ${inst.url}`));
+  });
+
+  function gracefulShutdown(signal) {
+    console.log(`\n[${signal}] Shutting down gracefully…`);
+    server.close(() => { console.log('Server closed.'); process.exit(0); });
+    setTimeout(() => process.exit(1), 5000);
+  }
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+}
+
 module.exports = { app, parseInstances, gluetunFetch, parseSpeedtestOutput };
