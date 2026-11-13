@@ -296,6 +296,7 @@ Each instance can have different authentication:
 | `GLUETUN_USER` | _(empty)_ | **Legacy** – Username for HTTP Basic auth |
 | `GLUETUN_PASSWORD` | _(empty)_ | **Legacy** – Password for HTTP Basic auth |
 | `PORT` | `3000` | Port the web UI listens on |
+| `DEFAULT_POLL_INTERVAL` | _(empty)_ | Default polling interval in milliseconds (e.g., 10000 for 10s). If set, used when no saved preference exists in localStorage. Must be one of: 0, 5000, 10000, 30000, 60000. |
 | `TRUST_PROXY` | `false` | Set to `true` if running behind a reverse proxy (nginx, Traefik, etc.) |
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | Comma-separated host allowlist for the Host header (DNS rebinding protection). Set it when accessing via LAN IP or a reverse-proxy domain, e.g. `ALLOWED_HOSTS=vpn.example.com`. |
 | `SPEEDTEST_ENABLED` | `false` | Enable the speed test card (requires Ookla CLI binary in image) |

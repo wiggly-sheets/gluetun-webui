@@ -217,8 +217,10 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(uiLimiter, express.static(path.join(__dirname, 'public')));
 app.use(express.json({ limit: '2kb' }));
+app.use(uiLimiter, express.static(path.join(__dirname, 'public'), {
+  index: false,
+}));
 
 async function gluetunFetch(instance, endpoint, method = 'GET', body = null) {
   const url = `${instance.url}${endpoint}`;
@@ -738,7 +740,11 @@ if (SPEEDTEST_ENABLED) {
 app.use('/api/', (req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
 
 app.get('/{*splat}', uiLimiter, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  const filePath = path.join(__dirname, 'public', 'index.html');
+  let html = fs.readFileSync(filePath, 'utf8');
+  const defaultInterval = process.env.DEFAULT_POLL_INTERVAL || '';
+  html = html.replace('{{DEFAULT_POLL_INTERVAL}}', defaultInterval);
+  res.send(html);
 });
 
 // Global error handler – catches synchronous throws and next(err) calls

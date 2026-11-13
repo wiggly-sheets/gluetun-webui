@@ -5,6 +5,7 @@ const VALID_STATES = new Set(['connected', 'paused', 'disconnected', 'unknown'])
 const LATENCY_GOOD_MS = 150;
 const LATENCY_WARN_MS = 400;
 const MAX_LATENCY_DISPLAY_MS = 800;
+const STORAGE_INTERVAL_KEY = 'gluetun-poll-interval';
 
 let instances    = [];   // [{ id, name }] from /api/instances
 let isPolling    = false;
@@ -974,11 +975,46 @@ async function initSpeedtest() {
 
 // ---- Event listeners ----
 
+function saveInterval() {
+    const select = $('refresh-interval');
+    const value = parseInt(select.value, 10);
+    if (!isNaN(value)) {
+        localStorage.setItem(STORAGE_INTERVAL_KEY, value);
+    }
+}
+
+// Restore saved polling interval
+const savedInterval = localStorage.getItem(STORAGE_INTERVAL_KEY);
+let intervalValue = null;
+if (savedInterval !== null) {
+    const parsed = parseInt(savedInterval, 10);
+    if (!isNaN(parsed) && [0, 5000, 10000, 30000, 60000].includes(parsed)) {
+        intervalValue = parsed;
+    }
+}
+// If no valid saved value, try the meta tag for default from environment
+if (intervalValue === null) {
+    const meta = document.getElementById('default-poll-interval');
+    if (meta && meta.content) {
+        const metaValue = parseInt(meta.content, 10);
+        if (!isNaN(metaValue) && [0, 5000, 10000, 30000, 60000].includes(metaValue)) {
+            intervalValue = metaValue;
+        }
+    }
+}
+// Apply the value if found
+if (intervalValue !== null) {
+    $('refresh-interval').value = intervalValue;
+}
+
 $('refresh-btn').addEventListener('click', () => {
-  clearTimeout(refreshTimer);
-  pollAll().then(() => scheduleNextPoll());
+    clearTimeout(refreshTimer);
+    pollAll().then(() => scheduleNextPoll());
 });
-$('refresh-interval').addEventListener('change', applyAutoRefresh);
+$('refresh-interval').addEventListener('change', () => {
+    saveInterval();
+    applyAutoRefresh();
+});
 
 async function updateServerForInstance(instanceId, newServer) {
   const body = { provider: { server_selection: { names: newServer ? [newServer] : [] } } };
