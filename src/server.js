@@ -80,7 +80,8 @@ const SERVERS_TTL = 60 * 60 * 1000;
 
 // --- Optional Web UI authentication ---
 // Opt-in: enabled only when BOTH WEBUI_USER and WEBUI_PASSWORD are set (env var or Docker secret webui_user/webui_password).
-// Sessions are an HMAC-signed cookie derived from the password (no extra config; a password change invalidates all sessions).
+// Sessions are an HMAC-signed cookie derived from the password with scrypt (no extra config;
+// a password change invalidates all sessions, and a stolen cookie cannot cheaply guess the password).
 const webuiUser     = getConfigValue('WEBUI_USER', 'webui_user');
 const webuiPassword = getConfigValue('WEBUI_PASSWORD', 'webui_password');
 if (Boolean(webuiUser) !== Boolean(webuiPassword)) {
@@ -90,7 +91,7 @@ if (Boolean(webuiUser) !== Boolean(webuiPassword)) {
 const authEnabled = Boolean(webuiUser && webuiPassword);
 const SESSION_COOKIE = 'webui_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const sessionSigningKey = crypto.createHash('sha256').update(webuiPassword).digest();
+const sessionSigningKey = crypto.scryptSync(String(webuiPassword ?? ''), 'gluetun-webui-session-v1', 32);
 // In-memory version, bumped on logout so already-issued cookies are rejected
 // (stateless HMAC cookies would otherwise stay valid until expiry).
 let sessionVersion = 0;
@@ -806,7 +807,8 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   const server = app.listen(PORT, () => {
     console.log(`Gluetun Web UI running on port ${PORT}`);
-    instances.forEach(inst => console.log(`  [${inst.id}] ${inst.name} → ${inst.url}`));
+    const redactUrl = (u) => { try { const x = new URL(u); return `${x.protocol}//${x.host}`; } catch (_) { return '[invalid url]'; } };
+    instances.forEach(inst => console.log(`  [${inst.id}] ${inst.name} → ${redactUrl(inst.url)}`));
   });
 
   function gracefulShutdown(signal) {

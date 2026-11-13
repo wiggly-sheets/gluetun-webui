@@ -23,7 +23,7 @@
       <div class="header-right">
         <span id="last-updated" class="muted">–</span>
         <button id="refresh-btn" type="button" title="Refresh now">&#x21bb; Refresh</button>
-        <button id="edit-toggle" title="Toggle edit mode">&#9998; Edit</button>
+        <button id="edit-toggle" title="Toggle edit mode" aria-pressed="false">&#9998; Edit</button>
         <label class="auto-refresh-label" title="Auto-refresh interval">
           <span>Auto</span>
           <select id="refresh-interval">
@@ -61,9 +61,6 @@
       </form>
     </div>
   </div>
-
-  <!-- Instance tabs – hidden when only one instance is configured -->
-  <nav id="instance-tabs" class="instance-tabs hidden" aria-label="Gluetun instances"></nav>
 
   <main id="app-main">
     <div id="dashboards-container" class="dashboards-container"></div>

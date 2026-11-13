@@ -66,7 +66,6 @@ function showLogin() {
   $('login-view').classList.remove('hidden');
   $('logout-btn').classList.add('hidden');
   $('app-main').classList.add('hidden');
-  $('instance-tabs').classList.add('hidden');
 }
 
 function showDashboard() {
@@ -280,7 +279,7 @@ function buildDashboardGroup(inst) {
         <div class="card-body">
           <div class="stat-row"><span class="stat-label">Status</span><span class="stat-value" id="i${id}-vpn-status">–</span></div>
           <div class="stat-row"><span class="stat-label">Provider</span><span class="stat-value" id="i${id}-vpn-provider">–</span></div>
-          <div class="stat-row"><span class="stat-label">Server</span><div id="i${id}-server-container" class="server-input-container"><select id="i${id}-server-select" class="server-select"><option value="">Auto (best)</option></select></div></div>
+          <div class="stat-row"><span class="stat-label">Server</span><div id="i${id}-server-container" class="server-input-container"><select id="i${id}-server-select" class="server-select" aria-label="VPN server"><option value="">Auto (best)</option></select></div></div>
           <div class="stat-row"><span class="stat-label">Protocol</span><span class="stat-value" id="i${id}-vpn-protocol">–</span></div>
           <div class="stat-row"><span class="stat-label">Country</span><span class="stat-value" id="i${id}-vpn-country">–</span></div>
           <div class="stat-row"><span class="stat-label">City</span><span class="stat-value" id="i${id}-vpn-city">–</span></div>
@@ -443,6 +442,8 @@ function updateServerSelect(id, s) {
     return;
   }
   if (select.dataset.provider !== provider || select.dataset.vpn !== vpnType) {
+    const retryKey = `${id}:${provider}:${vpnType}`;
+    if ((serversRetryAt.get(retryKey) || 0) > Date.now()) return;
     select.disabled = true;
     select.dataset.provider = provider;
     select.dataset.vpn = vpnType;
@@ -453,12 +454,14 @@ function updateServerSelect(id, s) {
       })
       .then(data => {
         if (!data.ok) throw new Error(data.error ?? 'Unknown error');
+        serversRetryAt.delete(retryKey);
         populateServerSelect(select, data.data, vpnType);
         select.disabled = false;
         select.value = currentName;
       })
       .catch(err => {
         console.error(`[servers][${id}]`, err.message);
+        serversRetryAt.set(retryKey, Date.now() + 60000);
         delete select.dataset.provider;
         delete select.dataset.vpn;
         select.innerHTML = '<option value="">Auto (best)</option>';
@@ -771,7 +774,7 @@ function buildSpeedtestCard() {
       <div class="speedtest-controls">
         <button id="speedtest-run" class="btn-success">&#9654; Run Test</button>
         <span id="speedtest-status" class="muted"></span>
-        <select id="speedtest-range" class="muted">
+        <select id="speedtest-range" class="muted" aria-label="Speed test history range">
           <option value="5">Last 5</option>
           <option value="10">Last 10</option>
           <option value="20">Last 20</option>
@@ -1021,6 +1024,8 @@ const CARD_IDS = ['ip', 'vpn', 'port', 'dns', 'history'];
 let editMode = false;
 let dragSrcCard = null;
 const dragBoundGrids = new WeakSet();
+// Backoff after a failed provider server-list fetch, keyed by instance+provider+vpn.
+const serversRetryAt = new Map();
 
 function layoutKey(instId) { return `gluetun_layout_${instId}`; }
 
@@ -1285,6 +1290,7 @@ function toggleEditMode() {
   editMode = !editMode;
   const btn = $('edit-toggle');
   btn.classList.toggle('active', editMode);
+  btn.setAttribute('aria-pressed', String(editMode));
   btn.innerHTML = editMode ? '&#10003; Done' : '&#9998; Edit';
   document.querySelectorAll('.dashboard-group').forEach(group => {
     const instId = group.id.replace('dashboard-', '');
@@ -1313,6 +1319,10 @@ function applyTheme(theme) {
     const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
     btn.title = `Switch to ${next} theme`;
     btn.setAttribute('aria-label', `Theme: ${theme}. Click to cycle.`);
+  }
+  // Plotly colors are resolved at render time, so redraw existing bars for the new palette.
+  if (latencyChartEnabled && latencyChartRenderer === 'plotly') {
+    instances.forEach(inst => renderLatencyChartFor(inst.id));
   }
 }
 

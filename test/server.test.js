@@ -3,6 +3,11 @@ import request from 'supertest';
 
 process.env.GLUETUN_1_URL = 'http://127.0.0.1:1';
 process.env.GLUETUN_1_NAME = 'Test Instance';
+// Keep tests independent of the developer's shell environment.
+delete process.env.WEBUI_USER;
+delete process.env.WEBUI_PASSWORD;
+delete process.env.TRUST_PROXY;
+delete process.env.SPEEDTEST_ENABLED;
 
 let app;
 let sanitizeVpnSettings;
