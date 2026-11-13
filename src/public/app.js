@@ -12,7 +12,6 @@ let isPolling    = false;
 let refreshTimer = null;
 let latencyChartEnabled = false;
 let latencyChartRenderer = 'svg';
-const instanceSettings = new Map(); // id -> settings object (from /api/:instanceId/health vpnSettings.data)
 const latencyHistory   = new Map(); // id -> number[] (ms, newest last)
 
 // Plotly color vars – resolved once at module load (documentElement exists at parse time)
@@ -24,11 +23,13 @@ const plotlyColorMap = {
   'var(--muted)': cssVar('--muted')
 };
 let authorized   = true; // false once the session expires / user logs out
+let authEnabled  = false; // server tells us whether login is configured
 
 // ---- Utility ----
 
 function $(id) { return document.getElementById(id); }
 function setEl(id, val) { const el = $(id); if (el) el.textContent = val ?? '–'; }
+function setText(id, val) { setEl(id, val); }
 
 function escHtml(str) {
   return String(str)
@@ -71,7 +72,7 @@ function showLogin() {
 function showDashboard() {
   authorized = true;
   $('login-view').classList.add('hidden');
-  $('logout-btn').classList.remove('hidden');
+  $('logout-btn').classList.toggle('hidden', !authEnabled);
   $('app-main').classList.remove('hidden');
 }
 
@@ -390,14 +391,14 @@ function buildDashboardGroup(inst) {
 function renderAllDashboards() {
   const container = $('dashboards-container');
   container.innerHTML = '';
+  const cols = Math.min(instances.length, 4) || 1;
+  container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
   instances.forEach(inst => {
     container.appendChild(buildDashboardGroup(inst));
     applyLayout(inst.id);
     renderHistoryFor(inst.id);
     if (latencyChartEnabled) renderLatencyChartFor(inst.id);
   });
-  const cols = Math.min(instances.length, 4) || 1;
-  container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 }
 
 // ---- Server dropdown population ----
@@ -639,6 +640,7 @@ function updatePanelError(inst) {
   if (banner) banner.className = 'status-banner unknown';
   setEl(`i${id}-banner-title`, 'Status Unknown');
   setEl(`i${id}-banner-sub`, 'Could not reach Gluetun control API');
+  setEl(`i${id}-ip-primary-label`, 'Public IP');
   setEl(`i${id}-ip-address`, '–');
   setEl(`i${id}-ip-country`, '–');
   setEl(`i${id}-ip-city`, '–');
@@ -649,6 +651,7 @@ function updatePanelError(inst) {
   setEl(`i${id}-vpn-protocol`, '–');
   setEl(`i${id}-vpn-country`, '–');
   setEl(`i${id}-vpn-city`, '–');
+  updateServerSelect(id, null);
   setEl(`i${id}-port-number`, 'N/A');
   setEl(`i${id}-dns-status`, 'Unavailable');
   setEl(`i${id}-ip-secondary-label`, 'Secondary IP');
@@ -753,6 +756,7 @@ function applyAutoRefresh() {
 
 let speedtestRunning = false;
 let speedtestResults = [];
+let speedtestResizeBound = false;
 
 function buildSpeedtestCard() {
   const card = document.createElement('div');
@@ -832,7 +836,7 @@ async function runSpeedtest() {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000);
-    const res = await fetch('/api/speedtest', { signal: controller.signal });
+    const res = await fetch('/api/speedtest', { method: 'POST', signal: controller.signal });
     clearTimeout(timeoutId);
     const data = await res.json();
     if (data.ok) {
@@ -955,11 +959,14 @@ async function initSpeedtest() {
   const container = $('dashboards-container');
   container.appendChild(card);
 
-  window.addEventListener('resize', () => {
-    if (!speedtestResults.length) return;
-    const n = parseInt($('speedtest-range').value, 10);
-    renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
-  });
+  if (!speedtestResizeBound) {
+    speedtestResizeBound = true;
+    window.addEventListener('resize', () => {
+      if (!speedtestResults.length) return;
+      const n = parseInt($('speedtest-range').value, 10);
+      renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
+    });
+  }
 
   // Load existing history
   try {
@@ -980,12 +987,13 @@ function saveInterval() {
     const select = $('refresh-interval');
     const value = parseInt(select.value, 10);
     if (!isNaN(value)) {
-        localStorage.setItem(STORAGE_INTERVAL_KEY, value);
+        try { localStorage.setItem(STORAGE_INTERVAL_KEY, value); } catch (_) {}
     }
 }
 
 // Restore saved polling interval
-const savedInterval = localStorage.getItem(STORAGE_INTERVAL_KEY);
+let savedInterval = null;
+try { savedInterval = localStorage.getItem(STORAGE_INTERVAL_KEY); } catch (_) {}
 let intervalValue = null;
 if (savedInterval !== null) {
     const parsed = parseInt(savedInterval, 10);
@@ -1055,10 +1063,11 @@ function applyLayout(instId) {
     cards[c.dataset.cardId] = c;
   });
 
-  // Reorder
+  // Reorder tracked cards, then pin cards outside the editable layout to the end
   layout.order.forEach(cid => {
     if (cards[cid]) grid.appendChild(cards[cid]);
   });
+  grid.querySelectorAll('.card:not([data-card-id])').forEach(c => grid.appendChild(c));
 
   // Sizes
   CARD_IDS.forEach(cid => {
@@ -1389,7 +1398,11 @@ $('logout-btn').addEventListener('click', async () => {
   // so return to the dashboard instead of stranding the user at a login screen.
   try {
     const res = await fetch('/api/auth');
-    if (res.ok && (await res.json()).authenticated) { await initDashboard(); return; }
+    if (res.ok) {
+      const data = await res.json();
+      authEnabled = data.authEnabled === true;
+      if (data.authenticated) { await initDashboard(); return; }
+    }
   } catch (_) {}
   showLogin();
 });
@@ -1435,9 +1448,13 @@ async function initDashboard() {
 (async () => {
   try {
     const res = await fetch('/api/auth');
-    if (res.ok && (await res.json()).authenticated) {
-      await initDashboard();
-      return;
+    if (res.ok) {
+      const data = await res.json();
+      authEnabled = data.authEnabled === true;
+      if (data.authenticated) {
+        await initDashboard();
+        return;
+      }
     }
   } catch (_) {}
   showLogin();

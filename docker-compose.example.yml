@@ -21,7 +21,7 @@ services:
       #- DEFAULT_POLL_INTERVAL=10000
       # Set to 'true' if behind a reverse proxy (nginx, Traefik, etc.)
       #- TRUST_PROXY=false
-      # Uncomment to enable the latency chart (poll round-trip time)
+      # Latency chart is on by default; set to false to disable
       #- LATENCY_CHART=false
       # Latency chart renderer: 'svg' (default) or 'plotly'
       #- LATENCY_CHART_RENDERER=svg
@@ -30,6 +30,8 @@ services:
       - gluetun-stack
     restart: unless-stopped
     read_only: true
+    volumes:
+      - gluetun-webui-data:/data
     tmpfs:
       - /tmp
     security_opt:
@@ -55,6 +57,9 @@ services:
 networks:
   gluetun-stack:
     driver: bridge
+
+volumes:
+  gluetun-webui-data:
 
 # ============================================================================
 # OPTION C: With IPv6 Support

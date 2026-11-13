@@ -5,10 +5,12 @@ process.env.GLUETUN_1_URL = 'http://127.0.0.1:1';
 process.env.GLUETUN_1_NAME = 'Test Instance';
 
 let app;
+let sanitizeVpnSettings;
 
 beforeAll(async () => {
   const mod = await import('../src/server.js');
   app = mod.app;
+  sanitizeVpnSettings = mod.sanitizeVpnSettings;
 });
 
 describe('GET /api/health', () => {
@@ -81,5 +83,28 @@ describe('Host header validation (DNS rebinding)', () => {
   it('allows localhost Host', async () => {
     const res = await request(app).get('/api/instances').set('Host', 'localhost:3000');
     expect(res.status).toBe(200);
+  });
+});
+
+describe('sanitizeVpnSettings', () => {
+  it('keeps UI fields and drops VPN credentials', () => {
+    const clean = sanitizeVpnSettings({
+      type: 'wireguard',
+      openvpn: { password: 'secret', key: 'key' },
+      wireguard: { private_key: 'priv', pre_shared_key: 'psk' },
+      provider: {
+        name: 'protonvpn',
+        server_selection: { names: ['nl-1'], hostnames: ['nl-1.example'], vpn: 'wireguard' },
+      },
+    });
+    expect(clean).toEqual({
+      type: 'wireguard',
+      provider: {
+        name: 'protonvpn',
+        server_selection: { names: ['nl-1'], hostnames: ['nl-1.example'], vpn: 'wireguard' },
+      },
+    });
+    expect(JSON.stringify(clean)).not.toContain('secret');
+    expect(JSON.stringify(clean)).not.toContain('priv');
   });
 });

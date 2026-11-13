@@ -727,6 +727,9 @@ const providerIntegrations = {
   },
 };
 
+// Gluetun reports PIA as "private internet access"; adapter keys use short names.
+providerIntegrations['private internet access'] = providerIntegrations.pia;
+
 module.exports = {
   providerIntegrations,
   // Exposed so the SRP math can be exercised offline (no real Proton credentials to verify
