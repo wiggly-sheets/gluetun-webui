@@ -257,7 +257,6 @@ main {
 .dot.latency-good { background: var(--green); }
 .dot.latency-warn { background: var(--yellow); }
 .dot.latency-bad  { background: var(--red); }
-
 /* ---- Latency chart ---- */
 .latency-chart-wrapper {
   overflow-x: auto;

@@ -9,8 +9,19 @@ const MAX_LATENCY_DISPLAY_MS = 800;
 let instances    = [];   // [{ id, name }] from /api/instances
 let isPolling    = false;
 let refreshTimer = null;
+let latencyChartEnabled = false;
+let latencyChartRenderer = 'svg';
 const instanceSettings = new Map(); // id -> settings object (from /api/:instanceId/health vpnSettings.data)
 const latencyHistory   = new Map(); // id -> number[] (ms, newest last)
+
+// Plotly color vars – resolved once at module load (documentElement exists at parse time)
+const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const plotlyColorMap = {
+  'var(--green)': cssVar('--green'),
+  'var(--yellow)': cssVar('--yellow'),
+  'var(--red)': cssVar('--red'),
+  'var(--muted)': cssVar('--muted')
+};
 
 // ---- Utility ----
 
@@ -78,6 +89,14 @@ function pushLatencyFor(id, ms) {
   hist.push(ms);
   if (hist.length > MAX_HISTORY) hist.shift();
   latencyHistory.set(id, hist);
+  try { localStorage.setItem(`gluetun_latency_${id}`, JSON.stringify(hist)); } catch (_) {}
+}
+
+function loadLatencyFor(id) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(`gluetun_latency_${id}`));
+    return Array.isArray(raw) ? raw.slice(0, MAX_HISTORY) : [];
+  } catch (_) { return []; }
 }
 
 function latencyColor(ms) {
@@ -87,15 +106,7 @@ function latencyColor(ms) {
   return 'var(--red)';
 }
 
-function renderLatencyChartFor(id) {
-  const container = document.getElementById(`i${id}-latency-chart`);
-  if (!container) return;
-  const hist = latencyHistory.get(id) || [];
-  if (hist.length === 0) {
-    container.innerHTML = '';
-    return;
-  }
-
+function renderSvgChartFor(container, hist) {
   const W = container.clientWidth || 600;
   const H = 64;
   const BAR_GAP = 2;
@@ -114,6 +125,68 @@ function renderLatencyChartFor(id) {
   }).join('');
 
   container.innerHTML = `<svg width="${svgW}" height="${H}" style="display:block">${bars}</svg>`;
+}
+
+function loadPlotly(onLoad) {
+  const s = document.createElement('script');
+  s.src = '/vendor/plotly/plotly-basic.min.js';
+  s.onload = onLoad;
+  document.head.appendChild(s);
+}
+
+// Containers already handed to Plotly. The lazy-load transition may leave the SVG chart
+// in the container; Plotly inserts (not replaces) its plot div, so the first render must clear.
+const plotlyRendered = new WeakSet();
+
+function renderPlotlyChartFor(container, hist) {
+  if (!plotlyRendered.has(container)) {
+    container.innerHTML = '';
+    plotlyRendered.add(container);
+  }
+  const x = hist.map((_, i) => i);
+  // 50 = the SVG renderer's minimum bar (4px on a 64px chart, scaled to the [0,800] axis); every bar gets at least this
+  const y = hist.map(ms => ms === null ? 50 : Math.max(50, ms));
+  const customdata = hist.map(ms => ms === null ? '–' : ms + 'ms');
+  const markerColor = hist.map(ms => {
+    const c = latencyColor(ms);
+    return plotlyColorMap[c] || '#64748b';
+  });
+  const data = [{
+    x: x,
+    y: y,
+    customdata: customdata,
+    marker: { color: markerColor },
+    hovertemplate: '%{customdata}<extra></extra>',
+    type: 'bar'
+  }];
+  const layout = {
+    height: 64,
+    margin: { t: 4, r: 4, b: 4, l: 30 },
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(0,0,0,0)',
+    font: { color: cssVar('--muted') || '#64748b', size: 10 },
+    xaxis: { showgrid: false, zeroline: false, showticklabels: false },
+    yaxis: { range: [0, MAX_LATENCY_DISPLAY_MS], showgrid: true, gridcolor: 'rgba(100,116,139,0.15)', zeroline: false },
+    bargap: 0.25
+  };
+  const config = { displayModeBar: false, responsive: true };
+  Plotly.react(container, data, layout, config);
+}
+
+function renderLatencyChartFor(id) {
+  const container = document.getElementById(`i${id}-latency-chart`);
+  if (!container) return;
+  const hist = latencyHistory.get(id) || [];
+  if (hist.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  if (latencyChartRenderer === 'plotly' && window.Plotly && window.Plotly.react) {
+    renderPlotlyChartFor(container, hist);
+  } else {
+    renderSvgChartFor(container, hist);
+  }
 
   const latest = hist[hist.length - 1];
   const statEl = document.getElementById(`i${id}-latency-stat`);
@@ -220,8 +293,7 @@ function buildDashboardGroup(inst) {
           </div>
         </div>
       </div>
-
-      <!-- Latency card -->
+      ${latencyChartEnabled ? `
       <div class="card card-wide">
         <div class="card-header">
           <span class="card-icon">&#9889;</span>
@@ -240,6 +312,7 @@ function buildDashboardGroup(inst) {
           </div>
         </div>
       </div>
+      ` : ''}
     </div>
   `;
   group.querySelector(`#i${id}-btn-start`).addEventListener('click', () => vpnAction(id, 'start'));
@@ -258,7 +331,7 @@ function renderAllDashboards() {
   instances.forEach(inst => {
     container.appendChild(buildDashboardGroup(inst));
     renderHistoryFor(inst.id);
-    renderLatencyChartFor(inst.id);
+    if (latencyChartEnabled) renderLatencyChartFor(inst.id);
   });
   const cols = Math.min(instances.length, 4) || 1;
   container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
@@ -461,13 +534,13 @@ async function pollAll() {
       const t0 = performance.now();
       const health = await fetchHealth(inst.id);
       const latencyMs = Math.round(performance.now() - t0);
-      pushLatencyFor(inst.id, latencyMs);
+      if (latencyChartEnabled) pushLatencyFor(inst.id, latencyMs);
       updatePanel(inst, health);
-      renderLatencyChartFor(inst.id);
+      if (latencyChartEnabled) renderLatencyChartFor(inst.id);
     } catch (_) {
-      pushLatencyFor(inst.id, null);
+      if (latencyChartEnabled) pushLatencyFor(inst.id, null);
       updatePanelError(inst);
-      renderLatencyChartFor(inst.id);
+      if (latencyChartEnabled) renderLatencyChartFor(inst.id);
     }
   }));
 
@@ -545,11 +618,30 @@ async function updateServerForInstance(instanceId, newServer) {
 
 (async () => {
   try {
+    const cfgRes = await fetch('/api/config');
+    if (cfgRes.ok) {
+      const cfg = await cfgRes.json();
+      latencyChartEnabled = cfg.latencyChart === true;
+      latencyChartRenderer = cfg.latencyChartRenderer === 'plotly' ? 'plotly' : 'svg';
+    }
+  } catch (_) {}
+  try {
     const res = await fetch('/api/instances');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     instances = await res.json();
   } catch (_) {
     instances = [{ id: '1', name: 'Gluetun' }];
+  }
+  if (latencyChartEnabled) {
+    instances.forEach(inst => {
+      const hist = loadLatencyFor(inst.id);
+      if (hist.length > 0) latencyHistory.set(inst.id, hist);
+    });
+  }
+  if (latencyChartEnabled && latencyChartRenderer === 'plotly') {
+    loadPlotly(() => {
+      instances.forEach(inst => renderLatencyChartFor(inst.id));
+    });
   }
   renderAllDashboards();
   await pollAll();
