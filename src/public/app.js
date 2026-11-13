@@ -1284,6 +1284,40 @@ function toggleEditMode() {
     if (panel) panel.style.display = editMode ? '' : 'none';
   });
 }
+// ---- Theme ----
+
+const THEMES = ['dark', 'light', 'auto'];
+const THEME_ICONS = { dark: '☾', light: '☀', auto: '◉' };
+let currentTheme = 'dark';
+
+function applyTheme(theme) {
+  currentTheme = theme;
+  if (theme === 'auto') {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+  } else {
+    document.documentElement.setAttribute('data-theme', theme);
+  }
+  const btn = $('theme-toggle');
+  if (btn) {
+    btn.textContent = THEME_ICONS[theme];
+    const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+    btn.title = `Switch to ${next} theme`;
+    btn.setAttribute('aria-label', `Theme: ${theme}. Click to cycle.`);
+  }
+}
+
+function cycleTheme() {
+  const idx = THEMES.indexOf(currentTheme);
+  const next = THEMES[(idx + 1) % THEMES.length];
+  try { localStorage.setItem('gluetun_theme', next); } catch (_) {}
+  applyTheme(next);
+}
+
+const mq = window.matchMedia('(prefers-color-scheme: dark)');
+const onSchemeChange = () => { if (currentTheme === 'auto') applyTheme('auto'); };
+if (mq.addEventListener) mq.addEventListener('change', onSchemeChange);
+else mq.addListener(onSchemeChange);
 
 // ---- Init ----
 
@@ -1296,6 +1330,12 @@ $('refresh-interval').addEventListener('change', () => {
     applyAutoRefresh();
 });
 $('edit-toggle').addEventListener('click', toggleEditMode);
+$('theme-toggle').addEventListener('click', cycleTheme);
+
+// Load saved theme
+let savedTheme = 'dark';
+try { savedTheme = localStorage.getItem('gluetun_theme') || 'dark'; } catch (_) {}
+applyTheme(THEMES.includes(savedTheme) ? savedTheme : 'dark');
 
 async function updateServerForInstance(instanceId, newServer) {
   const body = { provider: { server_selection: { names: newServer ? [newServer] : [] } } };

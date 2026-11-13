@@ -2,6 +2,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
+  color-scheme: dark;
   --bg: #0f1117;
   --surface: #1a1d27;
   --surface2: #21253a;
@@ -14,6 +15,20 @@
   --blue: #60a5fa;
   --radius: 12px;
   --shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --surface2: #f8fafc;
+  --border: #e2e8f0;
+  --text: #1e293b;
+  --muted: #64748b;
+  --green: #15803d;
+  --red: #dc2626;
+  --yellow: #a16207;
+  --blue: #2563eb;
+  --shadow: 0 4px 24px rgba(0,0,0,0.08);
 }
 
 html { font-size: 15px; }
@@ -70,6 +85,7 @@ button {
 }
 button:hover { background: var(--border); }
 #edit-toggle.active { background: rgba(74,222,128,0.15); border-color: var(--green); color: var(--green); }
+#theme-toggle { font-size: 1.1rem; line-height: 1; width: 2.2rem; display: flex; align-items: center; justify-content: center; }
 
 .auto-refresh-label {
   display: flex;
