@@ -50,6 +50,8 @@ A lightweight web UI for monitoring and controlling [Gluetun](https://github.com
 - Auto-refresh with configurable interval (5s – 60s)
 - Last 30 poll ticks colour-coded in history bar
 - Latency bar chart showing round-trip time to each Gluetun instance (green/yellow/red)
+- AirVPN integration — server load, health, bandwidth, and forwarded ports (requires `AIRVPN_API_KEY`)
+- Provider integrations — NordVPN, Mullvad, and PrivadoVPN server cards (no API key required)
 - Responsive design (mobile, tablet, desktop)
 - Server selection dropdown (all providers)
 - Persistent polling interval selection (via localStorage)
@@ -190,6 +192,26 @@ networks:
 
 ---
 
+## Provider Integrations
+
+Per-provider server cards show live data about the server you are connected to. Each adapter fetches the provider's public server list (no API key required), matches the connected server, and renders a card on the dashboard:
+
+| Provider | Card | Data shown |
+|---|---|---|
+| AirVPN | Rich card | Health, load, bandwidth, users, location, session transfer/speed (requires `AIRVPN_API_KEY`) |
+| NordVPN | Generic card | Server name, location, load |
+| Mullvad | Generic card | Server name, location, owned status, account expiry (with `MULLVAD_ACCOUNT_NUMBER`) |
+| IVPN | Generic card | Server name, location, load |
+| PIA | Generic card | Server name, location, port forwarding status |
+| Windscribe | Generic card | Server name, location |
+| Surfshark | Auth card | Server name, location, load, subscription expiry (requires `SURFSHARK_USER` + `SURFSHARK_PASSWORD`) |
+| ProtonVPN | Auth card | Server name, location, load (requires `PROTONVPN_USER` + `PROTONVPN_PASSWORD`) |
+| PrivadoVPN | Generic card | Server name, location, load |
+
+The generic card appears for any instance whose Gluetun provider is registered and disappears when the connected server cannot be matched (renamed/removed server) or the provider list is unreachable. More providers can be added incrementally by registering an adapter in `src/provider-integrations.js` — no frontend changes are needed for generic cards.
+
+---
+
 ## Multi-VPN Support
 
 ### Multiple Instances
@@ -261,6 +283,13 @@ Each instance can have different authentication:
 | `GLUETUN_{N}_USER` | _(empty)_ | Username for HTTP Basic auth (instance N) |
 | `GLUETUN_{N}_PASSWORD` | _(empty)_ | Password for HTTP Basic auth (instance N) |
 | `GLUETUN_{N}_IP_DISPLAY_MODE` | `auto` | IP display mode: `auto` (show both if IPv6 detected), `dual` (force both), or single IPv4 only |
+| `GLUETUN_{N}_AIRVPN_API_KEY` | _(empty)_ | AirVPN API key for server status & port forwarding (also settable globally via `AIRVPN_API_KEY`) |
+| `AIRVPN_API_KEY` | _(empty)_ | **Global** AirVPN API key used across all instances unless overridden per-instance |
+| `MULLVAD_ACCOUNT_NUMBER` | _(empty)_ | Mullvad account number; when set, the Mullvad provider card also shows the account expiry date |
+| `SURFSHARK_USER` / `SURFSHARK_PASSWORD` | _(empty)_ | Optional — Surfshark account credentials. Only needed for the Surfshark provider card (server name, location, load, subscription expiry); without them no Surfshark card is shown and no network calls are made |
+| `PROTONVPN_USER` / `PROTONVPN_PASSWORD` | _(empty)_ | Optional — ProtonVPN account credentials. Only needed for the ProtonVPN provider card (server name, location, load); without them no ProtonVPN card is shown and no network calls are made. Accounts with two-factor authentication (2FA) enabled are not supported |
+| `FORWARDED_PORT` | _(empty)_ | **Global** forwarded port shown when Gluetun reports 0 (AirVPN doesn't write to its status file) |
+| `GLUETUN_{N}_FORWARDED_PORT` | _(empty)_ | Per-instance forwarded port, overrides `FORWARDED_PORT` |
 | `GLUETUN_CONTROL_URL` | `http://gluetun:8000` | **Legacy** – single instance only (fallback if no `GLUETUN_1_*` vars) |
 | `GLUETUN_API_KEY` | _(empty)_ | **Legacy** – Bearer token for single instance |
 | `GLUETUN_USER` | _(empty)_ | **Legacy** – Username for HTTP Basic auth |

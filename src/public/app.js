@@ -343,6 +343,37 @@ function buildDashboardGroup(inst) {
         </div>
       </div>
       ` : ''}
+
+      <!-- AirVPN server card -->
+      <div class="card card-wide airvpn-card" id="i${id}-airvpn-card">
+        <div class="card-header">
+          <span class="card-icon">&#127758;</span>
+          <h3>AirVPN Server</h3>
+          <span id="i${id}-airvpn-server-name" class="badge ok"></span>
+        </div>
+        <div class="card-body">
+          <div class="stat-row"><span class="stat-label">Health</span><span class="stat-value" id="i${id}-airvpn-health">–</span></div>
+          <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value" id="i${id}-airvpn-load">–</span></div>
+          <div class="stat-row"><span class="stat-label">Bandwidth</span><span class="stat-value mono" id="i${id}-airvpn-bw">–</span></div>
+          <div class="stat-row"><span class="stat-label">Users</span><span class="stat-value" id="i${id}-airvpn-users">–</span></div>
+          <div class="stat-row"><span class="stat-label">Location</span><span class="stat-value" id="i${id}-airvpn-location">–</span></div>
+          <div class="stat-row"><span class="stat-label">Transferred</span><span class="stat-value mono" id="i${id}-airvpn-transfer">–</span></div>
+          <div class="stat-row"><span class="stat-label">Speed</span><span class="stat-value mono" id="i${id}-airvpn-speed">–</span></div>
+          <div class="stat-row"><span class="stat-label">Connected</span><span class="stat-value" id="i${id}-airvpn-connected">–</span></div>
+        </div>
+      </div>
+      <!-- Generic provider card (NordVPN / Mullvad / Privado integrations) -->
+      <div class="card card-wide provider-card" id="i${id}-provider-card">
+        <div class="card-header">
+          <span class="card-icon">&#127760;</span>
+          <h3>Provider Server</h3>
+          <span id="i${id}-provider-server-name" class="badge ok"></span>
+        </div>
+        <div class="card-body" id="i${id}-provider-body">
+          <div class="stat-row"><span class="stat-label">Location</span><span class="stat-value" id="i${id}-provider-location">–</span></div>
+          <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value" id="i${id}-provider-load">–</span></div>
+        </div>
+      </div>
     </div>
   `;
   group.querySelector(`#i${id}-btn-start`).addEventListener('click', () => vpnAction(id, 'start'));
@@ -439,7 +470,7 @@ function updateServerSelect(id, s) {
 
 function updatePanel(inst, health) {
   const id = inst.id;
-  const { vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings } = health;
+  const { vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings, airVpnServer, airVpnUserInfo } = health;
 
   const d  = vpnStatus?.ok ? vpnStatus.data : null;
   const s  = vpnSettings?.ok ? vpnSettings.data : null;
@@ -512,8 +543,92 @@ function updatePanel(inst, health) {
   setEl(`i${id}-dns-status`, dnsStatus?.ok ? (dnsStatus.data?.status ?? 'OK') : 'Unavailable');
 
   updateServerSelect(id, s);
+  // --- AirVPN server info ---
+  updateAirVpnPanel(id, health);
+  updateProviderPanel(id, health.providerData);
+
   pushHistoryFor(id, state);
   renderHistoryFor(id);
+}
+
+function updateAirVpnPanel(id, health) {
+  const { airVpnServer, airVpnUserInfo } = health;
+  const card = document.getElementById(`i${id}-airvpn-card`);
+  if (!card) return;
+
+  if (!airVpnServer?.ok || airVpnServer?.data == null) {
+    card.classList.remove('visible');
+    return;
+  }
+  card.classList.add('visible');
+
+  const s = airVpnServer.data;
+  setEl(`i${id}-airvpn-server-name`, s.public_name || '–');
+  setEl(`i${id}-airvpn-health`,     s.health === 'ok' ? 'OK' : (s.warning || s.health || '–'));
+  setEl(`i${id}-airvpn-load`,       s.currentload !== undefined ? `${s.currentload}%` : '–');
+  setEl(`i${id}-airvpn-bw`,         s.bw !== undefined && s.bw_max !== undefined ? `${s.bw}/${s.bw_max} Mbps` : '–');
+  setEl(`i${id}-airvpn-users`,      s.users !== undefined ? String(s.users) : '–');
+  const loc = [s.location, s.country_name].filter(Boolean).join(', ');
+  setEl(`i${id}-airvpn-location`,   loc || '–');
+
+  const nameBadge = document.getElementById(`i${id}-airvpn-server-name`);
+  if (nameBadge) {
+    nameBadge.className = s.health === 'ok' ? 'badge ok' : 'badge warn';
+  }
+
+  // Session stats from userinfo
+  const conn = airVpnUserInfo?.ok ? airVpnUserInfo.data?.connection : null;
+  if (conn) {
+    const read = conn.bytes_read || 0;
+    const write = conn.bytes_write || 0;
+    setEl(`i${id}-airvpn-transfer`, `${formatBytes(read)} ↑ / ${formatBytes(write)} ↓`);
+    const spdR = conn.speed_read || 0;
+    const spdW = conn.speed_write || 0;
+    setEl(`i${id}-airvpn-speed`, `${formatBytes(spdR)}/s ↑ / ${formatBytes(spdW)}/s ↓`);
+    setEl(`i${id}-airvpn-connected`, conn.connected_since_date || '–');
+  } else {
+    setEl(`i${id}-airvpn-transfer`, '–');
+    setEl(`i${id}-airvpn-speed`, '–');
+    setEl(`i${id}-airvpn-connected`, '–');
+  }
+}
+
+function updateProviderPanel(id, providerData) {
+  const card = document.getElementById(`i${id}-provider-card`);
+  if (!card) return;
+
+  if (!providerData?.ok || providerData.data == null) {
+    card.classList.remove('visible');
+    return;
+  }
+  card.classList.add('visible');
+
+  const d = providerData.data;
+  setEl(`i${id}-provider-server-name`, d.serverName || '–');
+  setEl(`i${id}-provider-location`, d.location || '–');
+  setEl(`i${id}-provider-load`, typeof d.load === 'number' ? `${d.load}%` : '–');
+
+  const body = document.getElementById(`i${id}-provider-body`);
+  body?.querySelectorAll('.provider-extra').forEach(el => el.remove());
+  (d.extra || []).forEach(row => {
+    const div = document.createElement('div');
+    div.className = 'stat-row provider-extra';
+    const label = document.createElement('span');
+    label.className = 'stat-label';
+    label.textContent = row.label;
+    const value = document.createElement('span');
+    value.className = 'stat-value';
+    value.textContent = row.value ?? '–';
+    div.append(label, value);
+    body.appendChild(div);
+  });
+}
+
+function formatBytes(b) {
+  if (b < 1) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(b) / Math.log(1024));
+  return `${(b / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
 function updatePanelError(inst) {
@@ -540,6 +655,10 @@ function updatePanelError(inst) {
   if (secondaryRow) secondaryRow.style.display = 'none';
   pushHistoryFor(id, 'unknown');
   renderHistoryFor(id);
+  const airCard = document.getElementById(`i${id}-airvpn-card`);
+  if (airCard) airCard.classList.remove('visible');
+  const provCard = document.getElementById(`i${id}-provider-card`);
+  if (provCard) provCard.classList.remove('visible');
 }
 
 // ---- API ----
@@ -573,7 +692,8 @@ async function pollAll() {
       if (latencyChartEnabled) pushLatencyFor(inst.id, latencyMs);
       updatePanel(inst, health);
       if (latencyChartEnabled) renderLatencyChartFor(inst.id);
-    } catch (_) {
+    } catch (err) {
+      console.error(`[poll][${inst.id}]`, err);
       if (latencyChartEnabled) pushLatencyFor(inst.id, null);
       updatePanelError(inst);
       if (latencyChartEnabled) renderLatencyChartFor(inst.id);

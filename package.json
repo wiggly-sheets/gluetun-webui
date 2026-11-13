@@ -10,9 +10,10 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "vitest run"
+    "test": "vitest run test/ && node src/provider-integrations.test.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.0",
     "plotly.js-basic-dist-min": "^3.7.0"
