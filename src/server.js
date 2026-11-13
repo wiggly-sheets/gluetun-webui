@@ -6,6 +6,8 @@ const crypto = require('crypto');
 const { providerIntegrations } = require('./provider-integrations');
 const { getConfigValue } = require('./config');
 
+const SPEEDTEST_ENABLED = process.env.SPEEDTEST_ENABLED === 'true';
+
 const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY === 'true');
 app.disable('x-powered-by');
@@ -644,6 +646,94 @@ app.get('/api/healthz', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Speed test (optional, gated by SPEEDTEST_ENABLED) ---
+const SPEEDTEST_HISTORY_FILE = process.env.SPEEDTEST_HISTORY_FILE || path.join(__dirname, '..', 'speedtest-history.json');
+
+function parseSpeedtestOutput(stdout) {
+  let result;
+  for (const line of stdout.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type === 'result') result = obj;
+    } catch (_) {}
+  }
+  if (!result) throw new Error('No result received from speedtest');
+  return result;
+}
+
+app.get('/api/speedtest/status', (req, res) => {
+  res.json({ enabled: SPEEDTEST_ENABLED });
+});
+
+if (SPEEDTEST_ENABLED) {
+  const { execFile } = require('child_process');
+  const { promisify } = require('util');
+  const execFileAsync = promisify(execFile);
+
+  const speedtestHistory = [];
+  const SPEEDTEST_MAX_HISTORY = 20;
+  const SPEEDTEST_BIN = process.env.SPEEDTEST_BIN || '/usr/local/bin/speedtest';
+
+  let running = false;
+
+  // Load persisted history (best-effort; fall back to empty on any error)
+  try {
+    const parsed = JSON.parse(fs.readFileSync(SPEEDTEST_HISTORY_FILE, 'utf8'));
+    if (!Array.isArray(parsed)) throw new Error('history file is not an array');
+    const valid = parsed.filter(e =>
+      e && typeof e.timestamp === 'string' && typeof e.download === 'number' && typeof e.upload === 'number' && typeof e.ping === 'number'
+    );
+    speedtestHistory.push(...valid.slice(-SPEEDTEST_MAX_HISTORY));
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.warn(`[speedtest] failed to load history: ${err.message}`);
+  }
+
+  app.get('/api/speedtest', async (req, res) => {
+    if (running) return res.status(409).json({ ok: false, error: 'Speed test already in progress' });
+    running = true;
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const { stdout } = await execFileAsync(SPEEDTEST_BIN, ['--accept-license', '--accept-gdpr', '-f', 'json', '-P', '8'], {
+            timeout: 60000,
+            maxBuffer: 1024 * 1024,
+          });
+          const result = parseSpeedtestOutput(stdout);
+          const entry = {
+            timestamp: new Date().toISOString(),
+            download: result.download.bandwidth,
+            upload: result.upload.bandwidth,
+            ping: result.ping.latency,
+            server: result.server.name,
+            isp: result.isp,
+          };
+          speedtestHistory.push(entry);
+          if (speedtestHistory.length > SPEEDTEST_MAX_HISTORY) speedtestHistory.shift();
+          try {
+            fs.writeFileSync(`${SPEEDTEST_HISTORY_FILE}.tmp`, JSON.stringify(speedtestHistory));
+            fs.renameSync(`${SPEEDTEST_HISTORY_FILE}.tmp`, SPEEDTEST_HISTORY_FILE);
+          } catch (err) {
+            console.error('[speedtest] failed to save history:', err.message);
+          }
+          return res.json({ ok: true, ...entry });
+        } catch (err) {
+          console.error(`[speedtest] attempt ${attempt + 1}:`, err.message);
+          if (err.killed || res.destroyed) break;
+          if (attempt === 0) await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+      res.status(500).json({ ok: false, error: 'Speed test failed' });
+    } finally {
+      running = false;
+    }
+  });
+
+  app.get('/api/speedtest/history', (req, res) => {
+    res.json({ ok: true, results: speedtestHistory });
+  });
+}
+
 // 404 for undefined /api/* routes – must come before SPA catch-all
 app.use('/api/', (req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
 
@@ -665,20 +755,4 @@ app.use((err, req, res, next) => {
   res.status(status).json({ ok: false, error: status >= 500 ? 'Internal server error' : err.message });
 });
 
-// Only listen when run directly (not when imported for testing)
-if (require.main === module) {
-  const server = app.listen(PORT, () => {
-    console.log(`Gluetun Web UI running on port ${PORT}`);
-    instances.forEach(inst => console.log(`  [${inst.id}] ${inst.name} → ${inst.url}`));
-  });
-
-  function gracefulShutdown(signal) {
-    console.log(`\n[${signal}] Shutting down gracefully…`);
-    server.close(() => { console.log('Server closed.'); process.exit(0); });
-    setTimeout(() => process.exit(1), 5000);
-  }
-  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-}
-
-module.exports = { app, parseInstances, gluetunFetch };
+module.exports = { app, parseInstances, gluetunFetch, parseSpeedtestOutput };

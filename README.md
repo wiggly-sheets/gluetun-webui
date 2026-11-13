@@ -50,6 +50,7 @@ A lightweight web UI for monitoring and controlling [Gluetun](https://github.com
 - Auto-refresh with configurable interval (5s – 60s)
 - Last 30 poll ticks colour-coded in history bar
 - Latency bar chart showing round-trip time to each Gluetun instance (green/yellow/red)
+- **Speed Test** — Run Ookla speed tests from the UI, track download/upload/ping over time (opt-in)
 - AirVPN integration — server load, health, bandwidth, and forwarded ports (requires `AIRVPN_API_KEY`)
 - Provider integrations — NordVPN, Mullvad, and PrivadoVPN server cards (no API key required)
 - Responsive design (mobile, tablet, desktop)
@@ -297,6 +298,7 @@ Each instance can have different authentication:
 | `PORT` | `3000` | Port the web UI listens on |
 | `TRUST_PROXY` | `false` | Set to `true` if running behind a reverse proxy (nginx, Traefik, etc.) |
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` | Comma-separated host allowlist for the Host header (DNS rebinding protection). Set it when accessing via LAN IP or a reverse-proxy domain, e.g. `ALLOWED_HOSTS=vpn.example.com`. |
+| `SPEEDTEST_ENABLED` | `false` | Enable the speed test card (requires Ookla CLI binary in image) |
 | `WEBUI_USER` | _(empty)_ | **Optional** – enable Web UI login (must set both `WEBUI_USER` and `WEBUI_PASSWORD`) |
 | `WEBUI_PASSWORD` | _(empty)_ | **Optional** – password for Web UI login (also sets the session signing key) |
 
@@ -381,6 +383,63 @@ labels:
   - "traefik.http.middlewares.auth.basicauth.users=user:$$apr1$$<hash>"
 ```
 Generate a hash with: `htpasswd -nb user password`
+
+---
+
+## Speed Test
+
+An optional speed test feature powered by the Ookla Speedtest CLI. Off by default.
+
+### Enabling
+
+Set `SPEEDTEST_ENABLED=true` in your environment:
+
+```yaml
+gluetun-webui:
+  environment:
+    - SPEEDTEST_ENABLED=true
+```
+
+A "Speed Test" card appears with a **Run Test** button. Each test takes 15–30 seconds and measures download, upload, ping, and server. Results are charted over time (last 20 tests). Use the dropdown on the card to show the last 5/10/20 tests or all.
+
+### Persistence
+
+Results persist across restarts in `SPEEDTEST_HISTORY_FILE` (default `/app/speedtest-history.json`). To keep history across container recreation, mount a volume at a path **other than `/app`** (that would shadow the app), e.g.:
+
+```yaml
+gluetun-webui:
+  environment:
+    - SPEEDTEST_HISTORY_FILE=/data/speedtest-history.json
+  volumes:
+    - speedtest-data:/data
+
+volumes:
+  speedtest-data:
+```
+
+Named volumes inherit the image's `/data` ownership; if you use a bind mount instead, ensure the host directory is writable by the container's non-root user (uid 100).
+
+### Routing Through VPN
+
+By default, the speed test measures the **webui container's connection**, which is typically the host's direct internet — not the VPN tunnel.
+
+To test your **VPN connection speed**, route the webui's traffic through Gluetun:
+
+```yaml
+gluetun-webui:
+  network_mode: "service:gluetun"   # shares Gluetun's network namespace
+  environment:
+    - GLUETUN_CONTROL_URL=http://localhost:8000  # changes from gluetun:8000
+    - SPEEDTEST_ENABLED=true
+  # Remove 'ports' and 'networks' sections — use Gluetun's ports instead
+```
+
+**Breaking config changes** when switching to `network_mode: "service:gluetun"`:
+- `GLUETUN_CONTROL_URL` must change to `http://localhost:8000`
+- Remove `ports:` from the webui service — expose port 3000 through Gluetun's port mappings instead
+- Remove `networks:` from the webui service
+
+Monitoring, VPN controls, and all other features continue to work normally.
 
 ---
 
@@ -497,7 +556,6 @@ Dual-stack is shown automatically when the provider supplies IPv6 through the tu
 ---
 
 ## Acknowledgments
-
 - **[Gluetun](https://github.com/qdm12/gluetun)** — The VPN client container this webui was built for
 - **[gluetun-monitor](https://github.com/csmarshall/gluetun-monitor)** — Great monitoring tool to pair with this webui
 - **AI-Assisted Development** — This project was built with AI assistance

@@ -747,6 +747,231 @@ function applyAutoRefresh() {
   scheduleNextPoll();
 }
 
+// ---- Speed Test ----
+
+let speedtestRunning = false;
+let speedtestResults = [];
+
+function buildSpeedtestCard() {
+  const card = document.createElement('div');
+  card.className = 'card card-wide';
+  card.id = 'speedtest-card';
+  card.innerHTML = `
+    <div class="card-header">
+      <span class="card-icon">&#9889;</span>
+      <h3>Speed Test</h3>
+    </div>
+    <div class="card-body">
+      <div class="speedtest-controls">
+        <button id="speedtest-run" class="btn-success">&#9654; Run Test</button>
+        <span id="speedtest-status" class="muted"></span>
+        <select id="speedtest-range" class="muted">
+          <option value="5">Last 5</option>
+          <option value="10">Last 10</option>
+          <option value="20">Last 20</option>
+          <option value="0" selected>All</option>
+        </select>
+      </div>
+      <div id="speedtest-result" class="speedtest-result hidden">
+        <div class="speedtest-stats">
+          <div class="speedtest-stat">
+            <span class="speedtest-stat-label">Download</span>
+            <span class="speedtest-stat-value mono" id="speedtest-dl">–</span>
+          </div>
+          <div class="speedtest-stat">
+            <span class="speedtest-stat-label">Upload</span>
+            <span class="speedtest-stat-value mono" id="speedtest-ul">–</span>
+          </div>
+          <div class="speedtest-stat">
+            <span class="speedtest-stat-label">Ping</span>
+            <span class="speedtest-stat-value mono" id="speedtest-ping">–</span>
+          </div>
+          <div class="speedtest-stat">
+            <span class="speedtest-stat-label">Server</span>
+            <span class="speedtest-stat-value mono" id="speedtest-server">–</span>
+          </div>
+        </div>
+        <div class="speedtest-chart-wrap hidden">
+          <canvas id="speedtest-chart" width="400" height="120"></canvas>
+        </div>
+      </div>
+    </div>
+  `;
+  card.querySelector('#speedtest-run').addEventListener('click', runSpeedtest);
+  card.querySelector('#speedtest-range').addEventListener('change', e => {
+    if (!speedtestResults.length) return;
+    const n = parseInt(e.target.value, 10);
+    renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
+  });
+  return card;
+}
+
+function formatMbps(bytesPerSec) {
+  if (!bytesPerSec || bytesPerSec === 0) return '–';
+  return ((bytesPerSec * 8) / 1000000).toFixed(1) + ' Mbps';
+}
+
+function renderSpeedtestResult(data) {
+  setText('speedtest-dl', formatMbps(data.download));
+  setText('speedtest-ul', formatMbps(data.upload));
+  setText('speedtest-ping', data.ping ? data.ping.toFixed(0) + ' ms' : '–');
+  setText('speedtest-server', data.server || '–');
+  $('speedtest-result').classList.remove('hidden');
+}
+
+async function runSpeedtest() {
+  if (speedtestRunning) return;
+  speedtestRunning = true;
+  const btn = document.getElementById('speedtest-run');
+  const status = document.getElementById('speedtest-status');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">&#x21bb;</span> Testing…';
+  status.textContent = 'Running speed test (may take 15–30 seconds)…';
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+    const res = await fetch('/api/speedtest', { signal: controller.signal });
+    clearTimeout(timeoutId);
+    const data = await res.json();
+    if (data.ok) {
+      renderSpeedtestResult(data);
+      status.textContent = 'Completed';
+      loadAndRenderSpeedtestChart();
+    } else {
+      status.textContent = data.error || 'Test failed';
+    }
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+  }
+  btn.disabled = false;
+  btn.innerHTML = '&#9654; Run Test';
+  speedtestRunning = false;
+}
+
+async function loadAndRenderSpeedtestChart() {
+  try {
+    const res = await fetch('/api/speedtest/history');
+    const data = await res.json();
+    if (!data.ok || !data.results.length) return;
+    speedtestResults = data.results;
+    const n = parseInt($('speedtest-range').value, 10);
+    renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
+  } catch (_) {}
+}
+
+function renderSpeedtestChart(results) {
+  const canvas = document.getElementById('speedtest-chart');
+  if (!canvas) return;
+  const wrap = canvas.closest('.speedtest-chart-wrap');
+  if (results.length < 2) { wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width = canvas.parentElement.clientWidth;
+  const H = canvas.height = 120;
+  ctx.clearRect(0, 0, W, H);
+
+  const GUTTER = 60;
+  const plotW = W - GUTTER;
+  const dl = results.map(r => r.download * 8 / 1000000);
+  const ul = results.map(r => r.upload * 8 / 1000000);
+  const maxVal = Math.max(...dl, ...ul, 1) * 1.15;
+  const step = plotW / (results.length - 1);
+
+  // Gridlines and Y-axis labels
+  ctx.font = '11px system-ui';
+  ctx.strokeStyle = 'rgba(100,116,139,0.25)';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#64748b';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  const targetTicks = 5;
+  const rawStep = maxVal / targetTicks;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  const tickStep = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+  const ticks = [];
+  for (let v = 0; v <= maxVal; v += tickStep) ticks.push(v);
+  ticks.forEach((v, i) => {
+    const y = H - (v / maxVal) * (H - 10) - 5;
+    ctx.beginPath();
+    ctx.moveTo(GUTTER, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+    const labelV = Math.round(v * 100) / 100;
+    const num = labelV === 0 ? '0' : (labelV >= 10 ? Math.round(labelV) : labelV.toFixed(1));
+    const label = i === ticks.length - 1 ? num + ' Mbps' : num;
+    ctx.fillText(label, GUTTER - 4, y);
+  });
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+
+  function drawLine(values, color) {
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    values.forEach((v, i) => {
+      const x = GUTTER + i * step;
+      const y = H - (v / maxVal) * (H - 10) - 5;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    values.forEach((v, i) => {
+      const x = GUTTER + i * step;
+      const y = H - (v / maxVal) * (H - 10) - 5;
+      ctx.beginPath();
+      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    });
+  }
+
+  drawLine(dl, '#4ade80');
+  drawLine(ul, '#60a5fa');
+
+  // Legend
+  ctx.font = '11px system-ui';
+  ctx.fillStyle = '#4ade80';
+  ctx.fillText('↓ DL', GUTTER + 4, 12);
+  ctx.fillStyle = '#60a5fa';
+  ctx.fillText('↑ UL', GUTTER + 40, 12);
+  ctx.fillStyle = '#64748b';
+  ctx.textAlign = 'right';
+  ctx.fillText(results.length + ' tests', W - 4, 12);
+  ctx.textAlign = 'left';
+}
+
+async function initSpeedtest() {
+  try {
+    const res = await fetch('/api/speedtest/status');
+    const data = await res.json();
+    const enabled = data.enabled;
+    if (!enabled) return;
+  } catch (_) { return; }
+
+  const card = buildSpeedtestCard();
+  const container = $('dashboards-container');
+  container.appendChild(card);
+
+  window.addEventListener('resize', () => {
+    if (!speedtestResults.length) return;
+    const n = parseInt($('speedtest-range').value, 10);
+    renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
+  });
+
+  // Load existing history
+  try {
+    const res = await fetch('/api/speedtest/history');
+    const data = await res.json();
+    if (data.ok && data.results.length) {
+      speedtestResults = data.results;
+      renderSpeedtestResult(data.results[data.results.length - 1]);
+      const n = parseInt($('speedtest-range').value, 10);
+      renderSpeedtestChart(n > 0 ? speedtestResults.slice(-n) : speedtestResults);
+    }
+  } catch (_) {}
+}
+
 // ---- Event listeners ----
 
 $('refresh-btn').addEventListener('click', () => {
@@ -846,6 +1071,7 @@ async function initDashboard() {
   }
   renderAllDashboards();
   await pollAll();
+  initSpeedtest();
   scheduleNextPoll();
 }
 
