@@ -6,6 +6,7 @@ node_modules/
 .env.local
 .env.*.local
 .npmrc
+docker-compose.yml
 
 # Logs
 npm-debug.log*

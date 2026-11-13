@@ -175,7 +175,7 @@ function buildDashboardGroup(inst) {
         <div class="card-body">
           <div class="stat-row"><span class="stat-label">Status</span><span class="stat-value" id="i${id}-vpn-status">–</span></div>
           <div class="stat-row"><span class="stat-label">Provider</span><span class="stat-value" id="i${id}-vpn-provider">–</span></div>
-          <div class="stat-row"><span class="stat-label">Server</span><span class="stat-value mono" id="i${id}-vpn-server">–</span></div>
+          <div class="stat-row"><span class="stat-label">Server</span><div id="i${id}-server-container" class="server-input-container"><select id="i${id}-server-select" class="server-select"><option value="">Auto (best)</option></select></div></div>
           <div class="stat-row"><span class="stat-label">Protocol</span><span class="stat-value" id="i${id}-vpn-protocol">–</span></div>
           <div class="stat-row"><span class="stat-label">Country</span><span class="stat-value" id="i${id}-vpn-country">–</span></div>
           <div class="stat-row"><span class="stat-label">City</span><span class="stat-value" id="i${id}-vpn-city">–</span></div>
@@ -244,6 +244,11 @@ function buildDashboardGroup(inst) {
   `;
   group.querySelector(`#i${id}-btn-start`).addEventListener('click', () => vpnAction(id, 'start'));
   group.querySelector(`#i${id}-btn-stop`).addEventListener('click', () => vpnAction(id, 'stop'));
+  const serverSelect = group.querySelector(`#i${id}-server-select`);
+  serverSelect.addEventListener('change', () => {
+    const selected = serverSelect.value;
+    updateServerForInstance(id, selected);
+  });
   return group;
 }
 
@@ -259,15 +264,83 @@ function renderAllDashboards() {
   container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 }
 
+// ---- Server dropdown population ----
+
+function populateServerSelect(select, servers, vpnType) {
+  select.innerHTML = '<option value="">Auto (best)</option>';
+  const seen = new Set();
+  const byCountry = new Map();
+  for (const entry of servers) {
+    if (!entry?.server_name) continue;
+    if (vpnType && entry.vpn !== vpnType) continue;
+    if (seen.has(entry.server_name)) continue;
+    seen.add(entry.server_name);
+    if (!byCountry.has(entry.country)) byCountry.set(entry.country, []);
+    byCountry.get(entry.country).push(entry.server_name);
+  }
+  for (const [country, names] of byCountry) {
+    const group = document.createElement('optgroup');
+    group.label = country || 'Other';
+    names.forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      group.appendChild(opt);
+    });
+    select.appendChild(group);
+  }
+}
+
+// --- Update the server dropdown for an instance's provider (fetched once per provider) ---
+function updateServerSelect(id, s) {
+  const select = document.getElementById(`i${id}-server-select`);
+  if (!select) return;
+  const provider = s?.provider?.name ?? '';
+  const vpnType = s?.provider?.server_selection?.vpn ?? '';
+  const currentName = s?.provider?.server_selection?.names?.[0] ?? '';
+  if (!provider) {
+    delete select.dataset.provider;
+    delete select.dataset.vpn;
+    select.innerHTML = '<option value="">Auto (best)</option>';
+    select.disabled = true;
+    return;
+  }
+  if (select.dataset.provider !== provider || select.dataset.vpn !== vpnType) {
+    select.disabled = true;
+    select.dataset.provider = provider;
+    select.dataset.vpn = vpnType;
+    fetch(`/api/${id}/servers?provider=${encodeURIComponent(provider)}`)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        if (!data.ok) throw new Error(data.error ?? 'Unknown error');
+        populateServerSelect(select, data.data, vpnType);
+        select.disabled = false;
+        select.value = currentName;
+      })
+      .catch(err => {
+        console.error(`[servers][${id}]`, err.message);
+        delete select.dataset.provider;
+        delete select.dataset.vpn;
+        select.innerHTML = '<option value="">Auto (best)</option>';
+        select.disabled = true;
+      });
+  } else {
+    select.value = currentName;
+  }
+}
+
 // ---- Update a panel with health data ----
 
 function updatePanel(inst, health) {
   const id = inst.id;
   const { vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings } = health;
 
-  const d  = vpnStatus?.ok   ? vpnStatus.data   : null;
-  const s  = vpnSettings?.ok ? vpnSettings.data  : null;
-  const ip = publicIp?.ok    ? publicIp.data     : null;
+  const d  = vpnStatus?.ok ? vpnStatus.data : null;
+  const s  = vpnSettings?.ok ? vpnSettings.data : null;
+  const ip = publicIp?.ok ? publicIp.data : null;
 
   const running = d?.status === 'running';
   const stopped = d?.status === 'stopped';
@@ -335,6 +408,7 @@ function updatePanel(inst, health) {
 
   setEl(`i${id}-dns-status`, dnsStatus?.ok ? (dnsStatus.data?.status ?? 'OK') : 'Unavailable');
 
+  updateServerSelect(id, s);
   pushHistoryFor(id, state);
   renderHistoryFor(id);
 }
@@ -449,6 +523,25 @@ $('refresh-btn').addEventListener('click', () => {
   pollAll().then(() => scheduleNextPoll());
 });
 $('refresh-interval').addEventListener('change', applyAutoRefresh);
+
+async function updateServerForInstance(instanceId, newServer) {
+  const body = { provider: { server_selection: { names: newServer ? [newServer] : [] } } };
+  try {
+    const res = await fetch(`/api/${instanceId}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const msg = await res.json().catch(() => null);
+      throw new Error(msg?.error ?? `HTTP ${res.status}`);
+    }
+    showToast(newServer ? `Switching to ${newServer}…` : 'Auto-selecting best server…', 'success');
+  } catch (err) {
+    console.error('[updateServer]', err.message);
+    showToast(`Failed: ${err.message}`, 'error');
+  }
+}
 
 (async () => {
   try {

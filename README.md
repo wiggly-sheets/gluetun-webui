@@ -51,7 +51,7 @@ A lightweight web UI for monitoring and controlling [Gluetun](https://github.com
 - Last 30 poll ticks colour-coded in history bar
 - Latency bar chart showing round-trip time to each Gluetun instance (green/yellow/red)
 - Responsive design (mobile, tablet, desktop)
-- Ability to change VPN server (hostname/IP) via UI
+- Server selection dropdown (all providers)
 - Persistent polling interval selection (via localStorage)
 
 ---
