@@ -31,14 +31,37 @@
             <option value="60000">60s</option>
           </select>
         </label>
+        <button id="logout-btn" class="hidden" title="Sign out">&#10007; Log out</button>
       </div>
     </div>
   </header>
 
+  <!-- Login view – shown when authentication is required -->
+  <div id="login-view" class="login-view hidden" role="dialog" aria-labelledby="login-title">
+    <div class="card login-card">
+      <div class="card-header">
+        <span class="card-icon">&#128274;</span>
+        <h2 id="login-title">Sign in</h2>
+      </div>
+      <form id="login-form" class="card-body login-form" autocomplete="on">
+        <label class="login-field">
+          <span class="stat-label">Username</span>
+          <input id="login-username" name="username" type="text" autocomplete="username" required />
+        </label>
+        <label class="login-field">
+          <span class="stat-label">Password</span>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <div id="login-error" class="login-error hidden" role="alert"></div>
+        <button type="submit">Sign in</button>
+      </form>
+    </div>
+  </div>
+
   <!-- Instance tabs – hidden when only one instance is configured -->
   <nav id="instance-tabs" class="instance-tabs hidden" aria-label="Gluetun instances"></nav>
 
-  <main>
+  <main id="app-main">
     <div id="dashboards-container" class="dashboards-container"></div>
   </main>
 

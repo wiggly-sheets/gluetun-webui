@@ -22,6 +22,7 @@ const plotlyColorMap = {
   'var(--red)': cssVar('--red'),
   'var(--muted)': cssVar('--muted')
 };
+let authorized   = true; // false once the session expires / user logs out
 
 // ---- Utility ----
 
@@ -49,6 +50,35 @@ function isIPv6(ip) {
 
 function ipTypeLabel(ip) {
   return isIPv6(ip) ? 'IPv6' : 'IPv4';
+}
+
+// ---- Authentication UI ----
+
+function stopPolling() {
+  authorized = false;
+  clearTimeout(refreshTimer);
+  isPolling = false;
+}
+
+function showLogin() {
+  stopPolling();
+  $('login-view').classList.remove('hidden');
+  $('logout-btn').classList.add('hidden');
+  $('app-main').classList.add('hidden');
+  $('instance-tabs').classList.add('hidden');
+}
+
+function showDashboard() {
+  authorized = true;
+  $('login-view').classList.add('hidden');
+  $('logout-btn').classList.remove('hidden');
+  $('app-main').classList.remove('hidden');
+}
+
+function showLoginError(message) {
+  const errEl = $('login-error');
+  errEl.textContent = message;
+  errEl.classList.remove('hidden');
 }
 
 // ---- Per-instance session history ----
@@ -516,6 +546,7 @@ function updatePanelError(inst) {
 
 async function fetchHealth(instanceId) {
   const res = await fetch(`/api/${instanceId}/health`);
+  if (res.status === 401) { showLogin(); showLoginError('Session expired, please sign in again.'); throw new Error('Unauthorized'); }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -523,7 +554,7 @@ async function fetchHealth(instanceId) {
 // ---- Poll all instances in parallel ----
 
 async function pollAll() {
-  if (isPolling) return;
+  if (isPolling || !authorized) return;
   isPolling = true;
   const refreshBtn = $('refresh-btn');
   refreshBtn.innerHTML = '<span class="spin">&#x21bb;</span> Refresh';
@@ -559,6 +590,7 @@ async function vpnAction(instanceId, action) {
   showToast(`${label} ${name}…`, 'info', 5000);
   try {
     const res  = await fetch(`/api/${instanceId}/vpn/${action}`, { method: 'PUT' });
+    if (res.status === 401) { showLogin(); showLoginError('Session expired, please sign in again.'); return; }
     const data = await res.json();
     if (data.ok) {
       showToast(`${name}: VPN ${action} command sent`, 'success');
@@ -575,6 +607,7 @@ async function vpnAction(instanceId, action) {
 
 function scheduleNextPoll() {
   clearTimeout(refreshTimer);
+  if (!authorized) return;
   const interval = parseInt($('refresh-interval').value, 10);
   if (interval > 0) {
     refreshTimer = setTimeout(async () => {
@@ -589,7 +622,7 @@ function applyAutoRefresh() {
   scheduleNextPoll();
 }
 
-// ---- Init ----
+// ---- Event listeners ----
 
 $('refresh-btn').addEventListener('click', () => {
   clearTimeout(refreshTimer);
@@ -616,7 +649,48 @@ async function updateServerForInstance(instanceId, newServer) {
   }
 }
 
-(async () => {
+// ---- Auth actions ----
+
+$('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('login-error').classList.add('hidden');
+  const username = $('login-username').value;
+  const password = $('login-password').value;
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      $('login-username').value = '';
+      $('login-password').value = '';
+      await initDashboard();
+    } else {
+      showLoginError(data.error ?? 'Invalid username or password');
+      $('login-password').value = '';
+    }
+  } catch (err) {
+    showLoginError(`Login failed: ${err.message}`);
+  }
+});
+
+$('logout-btn').addEventListener('click', async () => {
+  try { await fetch('/api/logout', { method: 'POST' }); } catch (_) {}
+  // Auth may be disabled server-side – in that case /api/auth still reports authenticated,
+  // so return to the dashboard instead of stranding the user at a login screen.
+  try {
+    const res = await fetch('/api/auth');
+    if (res.ok && (await res.json()).authenticated) { await initDashboard(); return; }
+  } catch (_) {}
+  showLogin();
+});
+
+// ---- Init ----
+
+async function initDashboard() {
+  showDashboard();
   try {
     const cfgRes = await fetch('/api/config');
     if (cfgRes.ok) {
@@ -627,6 +701,7 @@ async function updateServerForInstance(instanceId, newServer) {
   } catch (_) {}
   try {
     const res = await fetch('/api/instances');
+    if (res.status === 401) { showLogin(); showLoginError('Session expired, please sign in again.'); return; }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     instances = await res.json();
   } catch (_) {
@@ -646,4 +721,15 @@ async function updateServerForInstance(instanceId, newServer) {
   renderAllDashboards();
   await pollAll();
   scheduleNextPoll();
+}
+
+(async () => {
+  try {
+    const res = await fetch('/api/auth');
+    if (res.ok && (await res.json()).authenticated) {
+      await initDashboard();
+      return;
+    }
+  } catch (_) {}
+  showLogin();
 })();
