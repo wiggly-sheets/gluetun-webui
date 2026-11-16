@@ -1,10 +1,14 @@
-// Plain-Node SRP math check (no framework). Run: node src/provider-integrations.test.js
-// Exercises the exported __test SRP internals offline — no live Proton credentials needed.
+// Plain-Node checks (no framework). Run: node src/provider-integrations.test.js
+// Exercises the exported __test SRP internals and the provider adapter mappings offline —
+// no live credentials or network access needed.
 const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const { __test } = require('./provider-integrations');
 const { expandHash, bigIntFromLE, bigIntToLE, modExp, protonHashPassword, protonGenerateProofs } = __test;
 const SRP_BYTES = 256;
+
+// A real account number would make the mullvad card check POST to the live API.
+delete process.env.MULLVAD_ACCOUNT_NUMBER;
 
 // --- 1. expandHash: output length + known vector (SHA512(x||0..3), x empty) ---
 const expEmpty = expandHash(Buffer.alloc(0));
@@ -55,5 +59,37 @@ assert.deepEqual(M2, proofs.expectedServerProof, 'M2 agrees with server');
 // --- 4. B = 0 and B = N rejected (go-srp checkParams) ---
 assert.throws(() => protonGenerateProofs(modulus, xBytes, Buffer.alloc(SRP_BYTES)), /invalid server ephemeral/);
 assert.throws(() => protonGenerateProofs(modulus, xBytes, bigIntToLE(N, SRP_BYTES)), /invalid server ephemeral/);
+
+// --- 5. Provider adapters: match the logged-in server and normalize the card ---
+// Field mappings are provider-specific and partly reverse-engineered, so each representative
+// adapter is checked against a hand-built server-list entry. No network access.
+const { providerIntegrations } = require('./provider-integrations');
+// Compare only defined fields: dropping an unused optional key is behavior-neutral.
+const plain = value => JSON.parse(JSON.stringify(value));
+const adapterCases = [
+  ['nordvpn',
+    { name: 'Netherlands #123', hostname: 'nl123.nordvpn.com', load: 42, country: 'Netherlands', city: 'Amsterdam' },
+    'NL123.NORDVPN.COM',
+    { provider: 'nordvpn', serverName: 'Netherlands #123', location: 'Netherlands, Amsterdam', load: 42 }],
+  ['mullvad',
+    { hostname: 'nl-ams-wg-001', owned: true, country_name: 'Netherlands', city_name: 'Amsterdam' },
+    'NL-AMS-WG-001',
+    { provider: 'mullvad', serverName: 'nl-ams-wg-001', location: 'Netherlands, Amsterdam', extra: [{ label: 'Owned', value: 'Yes' }] }],
+  ['pia',
+    { id: 'us_east', name: 'US East', country: 'United States', dns: 'us-east.piaservers.net', portForward: true },
+    'US EAST',
+    { provider: 'pia', serverName: 'US East', location: 'United States', extra: [{ label: 'Port forwarding', value: 'Yes' }] }],
+  ['windscribe',
+    { name: 'Amsterdam', country: 'Netherlands', city: 'Amsterdam', hostname: 'nl-1.windscribe.com', dnsHostname: 'nl.dns' },
+    'NL-1.WINDSCRIBE.COM',
+    { provider: 'windscribe', serverName: 'nl-1.windscribe.com', location: 'Netherlands, Amsterdam' }],
+];
+
+for (const [key, entry, candidate, expectedCard] of adapterCases) {
+  const adapter = providerIntegrations[key];
+  assert.equal(adapter.matchServer([entry], [candidate]), entry, `${key} matches by its documented fields`);
+  assert.deepEqual(plain(adapter.buildCard([entry], entry)), plain(expectedCard), `${key} card shape`);
+  assert.equal(adapter.buildCard([entry], null), null, `${key} has no card without a match`);
+}
 
 console.log('PASS');
