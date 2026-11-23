@@ -1,6 +1,6 @@
 {
   "name": "gluetun-webui",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Web UI for Gluetun health and monitoring",
   "license": "MIT",
   "main": "src/server.js",
