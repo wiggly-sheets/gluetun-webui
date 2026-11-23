@@ -75,6 +75,8 @@ This is a fork of [Sir-Scuzza/gluetun-webui](https://github.com/Sir-Scuzza/gluet
 - Gluetun and gluetun-webui on the same Docker network
 
 > Supports `linux/amd64` and `linux/arm64` (works on Mac Intel/Apple Silicon, Linux, and Windows).
+>
+> This fork publishes the same multi-architecture image to GitHub Container Registry as `ghcr.io/wiggly-sheets/gluetun-webui:latest`.
 
 ---
 
