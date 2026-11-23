@@ -33,6 +33,8 @@
 
 A lightweight web UI for monitoring and controlling [Gluetun](https://github.com/qdm12/gluetun) — the VPN client container for Docker.
 
+This is a fork of [Sir-Scuzza/gluetun-webui](https://github.com/Sir-Scuzza/gluetun-webui). The upstream publishes the `scuzza/gluetun-webui` image; the fork additions described below exist only in this repo, so build from this repo (Option B) unless you publish your own image.
+
 ![Status: Connected](https://img.shields.io/badge/status-connected-brightgreen)
 ![Node 25](https://img.shields.io/badge/node-25--alpine-blue)
 ![Docker](https://img.shields.io/badge/docker-compose-blue)
@@ -49,10 +51,12 @@ A lightweight web UI for monitoring and controlling [Gluetun](https://github.com
 - Start / Stop VPN controls
 - Auto-refresh with configurable interval (5s – 60s)
 - Last 30 poll ticks colour-coded in history bar
-- Latency bar chart showing round-trip time to each Gluetun instance (green/yellow/red)
+- Latency bar chart showing round-trip time to each Gluetun instance (green/yellow/red), with per-instance history persisted in the browser
 - **Speed Test** — Run Ookla speed tests from the UI, track download/upload/ping over time (opt-in)
 - AirVPN integration — server load, health, bandwidth, and forwarded ports (requires `AIRVPN_API_KEY`)
-- Provider integrations — NordVPN, Mullvad, and PrivadoVPN server cards (no API key required)
+- Provider integrations — server cards for NordVPN, Mullvad, IVPN, PIA, Windscribe, Surfshark, ProtonVPN, and PrivadoVPN
+- Editable dashboard — reorder cards by dragging, resize them from the right edge, hide or show cards, and reset to defaults (per instance, saved in localStorage)
+- Theme picker — dark, light, or auto (follows the OS); applied before first paint and saved in localStorage
 - Responsive design (mobile, tablet, desktop)
 - Server selection dropdown (all providers)
 - Persistent polling interval selection (via localStorage)
@@ -147,10 +151,12 @@ gluetun-webui:
 ### Option B: Build Locally
 
 ```bash
-git clone https://github.com/Sir-Scuzza/gluetun-webui.git
+git clone https://github.com/wiggly-sheets/gluetun-webui.git
 cd gluetun-webui
 docker compose up -d --build
 ```
+
+Use this option to get the fork features described in this README. The pre-built `scuzza/gluetun-webui` image is the upstream release.
 
 Then run (either option):
 
@@ -283,7 +289,7 @@ Each instance can have different authentication:
 | `GLUETUN_{N}_API_KEY` | _(empty)_ | Bearer token for instance N (if auth enabled) |
 | `GLUETUN_{N}_USER` | _(empty)_ | Username for HTTP Basic auth (instance N) |
 | `GLUETUN_{N}_PASSWORD` | _(empty)_ | Password for HTTP Basic auth (instance N) |
-| `GLUETUN_{N}_IP_DISPLAY_MODE` | `auto` | IP display mode: `auto` (show both if IPv6 detected), `dual` (force both), or single IPv4 only |
+| `GLUETUN_{N}_IP_DISPLAY_MODE` | `auto` | IP display mode: `auto` (show both if IPv6 detected), `dual` (force both), or `single` (primary IP only) |
 | `GLUETUN_{N}_AIRVPN_API_KEY` | _(empty)_ | AirVPN API key for server status & port forwarding (also settable globally via `AIRVPN_API_KEY`) |
 | `AIRVPN_API_KEY` | _(empty)_ | **Global** AirVPN API key used across all instances unless overridden per-instance |
 | `MULLVAD_ACCOUNT_NUMBER` | _(empty)_ | Mullvad account number; when set, the Mullvad provider card also shows the account expiry date |
@@ -302,8 +308,16 @@ Each instance can have different authentication:
 | `LATENCY_CHART` | `true` | Round-trip latency chart is shown by default. Set to `false` to disable it and its polling overhead. |
 | `LATENCY_CHART_RENDERER` | `svg` | Chart renderer: `svg` (bundled, no dependency) or `plotly` (loads the Plotly bundle from the image). |
 | `SPEEDTEST_ENABLED` | `false` | Enable the speed test card (requires Ookla CLI binary in image) |
+| `SPEEDTEST_HISTORY_FILE` | `/data/speedtest-history.json` | Path for persisted speed test history. Falls back to the app directory when `/data` does not exist. |
+| `SPEEDTEST_BIN` | `/usr/local/bin/speedtest` | Path to the Ookla speedtest CLI binary |
 | `WEBUI_USER` | _(empty)_ | **Optional** – enable Web UI login (must set both `WEBUI_USER` and `WEBUI_PASSWORD`) |
 | `WEBUI_PASSWORD` | _(empty)_ | **Optional** – password for Web UI login (also sets the session signing key) |
+
+### Docker Secrets
+
+Most configuration values can be supplied as Docker secrets instead of environment variables. The app reads `/run/secrets/<name>` first and falls back to the environment. The secret name is the lowercase variable name, for example `gluetun_1_api_key`, `gluetun_1_password`, `airvpn_api_key`, `webui_user`, or `webui_password`.
+
+The remaining feature flags (`PORT`, `TRUST_PROXY`, `ALLOWED_HOSTS`, `LATENCY_CHART`, `LATENCY_CHART_RENDERER`, `DEFAULT_POLL_INTERVAL`, `SPEEDTEST_*`, `MULLVAD_ACCOUNT_NUMBER`) are read from environment variables only.
 
 ---
 
@@ -389,6 +403,25 @@ Generate a hash with: `htpasswd -nb user password`
 
 ---
 
+## Dashboard Layout & Theme
+
+### Edit mode
+
+Click **Edit** in the header to rearrange the dashboard. In edit mode you can:
+
+- Drag a card onto another card to reorder the grid
+- Drag the handle on a card's right edge to change its column span
+- Use the panel above the grid to hide or show cards
+- Click **Reset** to restore the default layout
+
+Layouts are saved per instance in `localStorage` (`gluetun_layout_{N}`), so each Gluetun instance keeps its own arrangement.
+
+### Theme
+
+The moon/sun button in the header cycles through **dark**, **light**, and **auto**. Auto follows the operating system's colour-scheme preference. The choice is saved in `localStorage` (`gluetun_theme`) and applied by `theme-init.js` before first paint to avoid a flash of the wrong theme.
+
+---
+
 ## Speed Test
 
 An optional speed test feature powered by the Ookla Speedtest CLI. Off by default.
@@ -407,7 +440,7 @@ A "Speed Test" card appears with a **Run Test** button. Each test takes 15–30 
 
 ### Persistence
 
-Results persist across restarts in `SPEEDTEST_HISTORY_FILE` (default `/app/speedtest-history.json`). To keep history across container recreation, mount a volume at a path **other than `/app`** (that would shadow the app), e.g.:
+Results persist across restarts in `SPEEDTEST_HISTORY_FILE` (default `/data/speedtest-history.json` when `/data` exists). To keep history across container recreation, mount a volume at a path **other than `/app`** (that would shadow the app), e.g.:
 
 ```yaml
 gluetun-webui:
