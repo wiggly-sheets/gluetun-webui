@@ -13,18 +13,35 @@ services:
       - "127.0.0.1:3000:3000"
     environment:
       - GLUETUN_CONTROL_URL=http://gluetun:8000
-      # Uncomment if Gluetun auth is enabled:
+      # --- Gluetun control-server auth (only if enabled) ---
       #- GLUETUN_API_KEY=yourtoken
       #- GLUETUN_USER=username
       #- GLUETUN_PASSWORD=password
+      # --- Provider cards and forwarded port ---
+      #- AIRVPN_API_KEY=yourkey
+      #- FORWARDED_PORT=42562
+      #- MULLVAD_ACCOUNT_NUMBER=0000000000000000
+      #- SURFSHARK_USER=you@example.com
+      #- SURFSHARK_PASSWORD=yourpassword
+      #- PROTONVPN_USER=you@example.com
+      #- PROTONVPN_PASSWORD=yourpassword
+      # --- Web UI login ---
+      #- WEBUI_USER=admin
+      #- WEBUI_PASSWORD=change-me
+      # --- Speed test ---
+      #- SPEEDTEST_ENABLED=true
+      #- SPEEDTEST_HISTORY_FILE=/data/speedtest-history.json
+      # --- Polling and charts ---
       # Default polling interval in milliseconds (0, 5000, 10000, 30000, 60000)
       #- DEFAULT_POLL_INTERVAL=10000
-      # Set to 'true' if behind a reverse proxy (nginx, Traefik, etc.)
-      #- TRUST_PROXY=false
       # Latency chart is on by default; set to false to disable
       #- LATENCY_CHART=false
       # Latency chart renderer: 'svg' (default) or 'plotly'
       #- LATENCY_CHART_RENDERER=svg
+      # --- Reverse proxy / remote access ---
+      #- ALLOWED_HOSTS=vpn.example.com
+      # Set to 'true' if behind a reverse proxy (nginx, Traefik, etc.)
+      #- TRUST_PROXY=true
     
     networks:
       - gluetun-stack
@@ -123,6 +140,9 @@ volumes:
 #       - GLUETUN_1_NAME=VPN - London
 #       - GLUETUN_1_URL=http://gluetun-1:8000
 #       - GLUETUN_1_API_KEY=token1
+#       #- GLUETUN_1_IP_DISPLAY_MODE=auto
+#       #- GLUETUN_1_AIRVPN_API_KEY=yourkey
+#       #- GLUETUN_1_FORWARDED_PORT=42562
 #       
 #       - GLUETUN_2_NAME=VPN - Amsterdam  
 #       - GLUETUN_2_URL=http://gluetun-2:8000
@@ -153,8 +173,26 @@ volumes:
 # secrets:
 #   gluetun_api_key:
 #     file: ./secrets/gluetun_api_key.txt
+#   gluetun_user:
+#     file: ./secrets/gluetun_user.txt
 #   gluetun_password:
 #     file: ./secrets/gluetun_password.txt
+#   webui_user:
+#     file: ./secrets/webui_user.txt
+#   webui_password:
+#     file: ./secrets/webui_password.txt
+#   airvpn_api_key:
+#     file: ./secrets/airvpn_api_key.txt
+#   mullvad_account_number:
+#     file: ./secrets/mullvad_account_number.txt
+#   surfshark_user:
+#     file: ./secrets/surfshark_user.txt
+#   surfshark_password:
+#     file: ./secrets/surfshark_password.txt
+#   protonvpn_user:
+#     file: ./secrets/protonvpn_user.txt
+#   protonvpn_password:
+#     file: ./secrets/protonvpn_password.txt
 # 
 # services:
 #   gluetun-webui:
@@ -164,12 +202,20 @@ volumes:
 #       - "127.0.0.1:3000:3000"
 #     environment:
 #       - GLUETUN_CONTROL_URL=http://gluetun:8000
-#       # For API key authentication (uses Docker secret):
-#       # Secret will be read from /run/secrets/gluetun_api_key
-#       # No need to set GLUETUN_API_KEY in environment
+#       # Secrets are read from /run/secrets/<lowercase variable name>.
+#       # Do not also set the matching environment variable.
 #     secrets:
 #       - gluetun_api_key
+#       - gluetun_user
 #       - gluetun_password
+#       - webui_user
+#       - webui_password
+#       - airvpn_api_key
+#       - mullvad_account_number
+#       - surfshark_user
+#       - surfshark_password
+#       - protonvpn_user
+#       - protonvpn_password
 #     networks:
 #       - gluetun-stack
 #     restart: unless-stopped

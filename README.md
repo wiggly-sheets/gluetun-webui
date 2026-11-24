@@ -55,7 +55,7 @@ This is a fork of [Sir-Scuzza/gluetun-webui](https://github.com/Sir-Scuzza/gluet
 - **Speed Test** — Run Ookla speed tests from the UI, track download/upload/ping over time (opt-in)
 - AirVPN integration — server load, health, bandwidth, and forwarded ports (requires `AIRVPN_API_KEY`)
 - Provider integrations — server cards for NordVPN, Mullvad, IVPN, PIA, Windscribe, Surfshark, ProtonVPN, and PrivadoVPN
-- Editable dashboard — reorder cards by dragging, resize them from the right edge, hide or show cards, and reset to defaults (per instance, saved in localStorage)
+- Editable dashboard — reorder cards by dragging, resize them from the bottom-right corner, hide or show cards, and reset to defaults (per instance, saved in localStorage)
 - Theme picker — dark, light, or auto (follows the OS); applied before first paint and saved in localStorage
 - Responsive design (mobile, tablet, desktop)
 - Server selection dropdown (all providers)
@@ -94,10 +94,31 @@ gluetun-webui:
     - "127.0.0.1:3000:3000"
   environment:
     - GLUETUN_CONTROL_URL=http://gluetun:8000
-    # Uncomment if Gluetun auth is enabled:
+    # --- Gluetun control-server auth (only if enabled) ---
     #- GLUETUN_API_KEY=yourtoken
     #- GLUETUN_USER=username
     #- GLUETUN_PASSWORD=password
+    # --- Provider cards and forwarded port ---
+    #- AIRVPN_API_KEY=yourkey
+    #- FORWARDED_PORT=42562
+    #- MULLVAD_ACCOUNT_NUMBER=0000000000000000
+    #- SURFSHARK_USER=you@example.com
+    #- SURFSHARK_PASSWORD=yourpassword
+    #- PROTONVPN_USER=you@example.com
+    #- PROTONVPN_PASSWORD=yourpassword
+    # --- Web UI login ---
+    #- WEBUI_USER=admin
+    #- WEBUI_PASSWORD=change-me
+    # --- Speed test ---
+    #- SPEEDTEST_ENABLED=true
+    #- SPEEDTEST_HISTORY_FILE=/data/speedtest-history.json
+    # --- Polling and charts ---
+    #- DEFAULT_POLL_INTERVAL=10000
+    #- LATENCY_CHART=true
+    #- LATENCY_CHART_RENDERER=svg
+    # --- Reverse proxy / remote access ---
+    #- ALLOWED_HOSTS=vpn.example.com
+    #- TRUST_PROXY=true
   networks:
     - your_network_name
   restart: unless-stopped
@@ -114,6 +135,9 @@ gluetun-webui:
     timeout: 5s
     start_period: 10s
     retries: 3
+  # Optional: persist speed-test history outside the container
+  # volumes:
+  #   - ./gluetun-webui-data:/data
 ```
 
 ### Option A2: Multiple Instances
@@ -130,6 +154,9 @@ gluetun-webui:
     - GLUETUN_1_NAME=VPN - London
     - GLUETUN_1_URL=http://gluetun-1:8000
     - GLUETUN_1_API_KEY=token1
+    #- GLUETUN_1_IP_DISPLAY_MODE=auto
+    #- GLUETUN_1_AIRVPN_API_KEY=yourkey
+    #- GLUETUN_1_FORWARDED_PORT=42562
 
     - GLUETUN_2_NAME=VPN - Amsterdam
     - GLUETUN_2_URL=http://gluetun-2:8000
