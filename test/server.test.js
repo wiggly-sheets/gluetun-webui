@@ -43,6 +43,28 @@ describe('GET /api/health', () => {
   });
 });
 
+describe('legacy instance-1 endpoints', () => {
+  for (const path of ['/api/status', '/api/publicip', '/api/portforwarded', '/api/settings', '/api/dns']) {
+    it(`still proxies ${path}`, async () => {
+      const res = await request(app).get(path);
+      expect(res.status).toBe(502);
+      expect(res.body).toEqual({ ok: false, error: 'Upstream error' });
+    });
+  }
+
+  it('still validates legacy VPN actions', async () => {
+    const res = await request(app).put('/api/vpn/restart');
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+
+  it('still proxies legacy VPN actions', async () => {
+    const res = await request(app).put('/api/vpn/start');
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ ok: false, error: 'Upstream error' });
+  });
+});
+
 describe('GET /api/instances', () => {
   it('returns only the configured public fields', async () => {
     const res = await request(app).get('/api/instances');

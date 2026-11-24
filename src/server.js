@@ -264,6 +264,25 @@ app.get('/api/health', async (req, res) => {
   res.json({ ok: true, ...health });
 });
 
+// --- Legacy instance-1 proxy endpoints (kept for parity with the upstream API) ---
+function legacyProxy(endpoint) {
+  return async (req, res) => {
+    try {
+      const data = await gluetunFetch(instances[0], endpoint);
+      res.json({ ok: true, data });
+    } catch (err) {
+      console.error('[upstream]', err.message);
+      res.status(502).json({ ok: false, error: 'Upstream error' });
+    }
+  };
+}
+
+app.get('/api/status', legacyProxy('/v1/vpn/status'));
+app.get('/api/publicip', legacyProxy('/v1/publicip/ip'));
+app.get('/api/portforwarded', legacyProxy('/v1/portforward'));
+app.get('/api/settings', legacyProxy('/v1/vpn/settings'));
+app.get('/api/dns', legacyProxy('/v1/dns/status'));
+
 app.put('/api/:instanceId/settings', settingsLimiter, async (req, res) => {
   const instance = resolveInstance(req.params.instanceId);
   if (!instance) return res.status(400).json({ ok: false, error: 'Unknown instance ID' });
@@ -331,11 +350,7 @@ const vpnActionLimiter = rateLimit({
   message: { ok: false, error: 'Too many requests, please try again later.' },
 });
 
-// --- Per-instance VPN control ---
-app.put('/api/:instanceId/vpn/:action', vpnActionLimiter, async (req, res) => {
-  const instance = resolveInstance(req.params.instanceId);
-  if (!instance) return res.status(400).json({ ok: false, error: 'Unknown instance ID' });
-  const { action } = req.params;
+async function sendVpnAction(instance, action, res) {
   const allowed = ['start', 'stop'];
   if (!allowed.includes(action)) {
     return res.status(400).json({ ok: false, error: 'Invalid action. Use start or stop.' });
@@ -353,6 +368,18 @@ app.put('/api/:instanceId/vpn/:action', vpnActionLimiter, async (req, res) => {
     console.error(`[upstream][${instance.id}]`, err.message);
     res.status(502).json({ ok: false, error: 'Upstream error' });
   }
+}
+
+// --- Per-instance VPN control ---
+app.put('/api/:instanceId/vpn/:action', vpnActionLimiter, async (req, res) => {
+  const instance = resolveInstance(req.params.instanceId);
+  if (!instance) return res.status(400).json({ ok: false, error: 'Unknown instance ID' });
+  await sendVpnAction(instance, req.params.action, res);
+});
+
+// --- Legacy VPN control (instance 1) ---
+app.put('/api/vpn/:action', vpnActionLimiter, async (req, res) => {
+  await sendVpnAction(instances[0], req.params.action, res);
 });
 
 // Serve Plotly bundle

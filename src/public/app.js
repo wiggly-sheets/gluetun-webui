@@ -365,7 +365,7 @@ const CARD_MODULES = {
       setEl(`i${id}-vpn-protocol`, s?.type ?? '–');
       setEl(`i${id}-vpn-country`, ip?.country ?? '–');
       setEl(`i${id}-vpn-city`, ip?.city ?? '–');
-      updateServerSelect(id, s);
+      updateServerSelect(id, s, ip);
     },
     clear: id => {
       setEl(`i${id}-vpn-status`, '–');
@@ -704,12 +704,15 @@ function applyServerValue(select, name) {
   select.value = name;
 }
 
-function updateServerSelect(id, s) {
+function updateServerSelect(id, s, ip = null) {
   const select = document.getElementById(`i${id}-server-select`);
   if (!select) return;
   const provider = s?.provider?.name ?? '';
   const vpnType = s?.provider?.server_selection?.vpn ?? '';
-  const currentName = s?.provider?.server_selection?.names?.[0] ?? '';
+  const currentName = s?.provider?.server_selection?.names?.[0]
+    ?? s?.provider?.server_selection?.hostnames?.[0]
+    ?? ip?.hostname
+    ?? '';
   if (!provider) {
     delete select.dataset.provider;
     delete select.dataset.vpn;
@@ -764,7 +767,7 @@ function updatePanel(inst, health) {
   const banner = document.getElementById(`i${id}-banner`);
   if (banner) banner.className = `status-banner ${state}`;
 
-  const primaryIp   = ip?.public_ip ?? ip?.ip ?? '';
+  const primaryIp   = ip?.public_ip ?? ip?.ip ?? ip?.IP ?? '';
   const secondaryIp = health.publicIpv6?.ok ? (health.publicIpv6.data?.ipv6 || '') : '';
   const displayMode = inst.ipDisplayMode || 'auto';
   const showSecondary = displayMode === 'dual' || (displayMode === 'auto' && !!secondaryIp);
