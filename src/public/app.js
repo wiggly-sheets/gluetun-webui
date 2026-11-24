@@ -14,14 +14,16 @@ let latencyChartEnabled = false;
 let latencyChartRenderer = 'svg';
 const latencyHistory   = new Map(); // id -> number[] (ms, newest last)
 
-// Plotly color vars – resolved once at module load (documentElement exists at parse time)
+// Plotly color vars – resolved at render time so a theme switch picks up the new palette.
 const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const plotlyColorMap = {
-  'var(--green)': cssVar('--green'),
-  'var(--yellow)': cssVar('--yellow'),
-  'var(--red)': cssVar('--red'),
-  'var(--muted)': cssVar('--muted')
-};
+function plotlyColorMap() {
+  return {
+    'var(--green)': cssVar('--green'),
+    'var(--yellow)': cssVar('--yellow'),
+    'var(--red)': cssVar('--red'),
+    'var(--muted)': cssVar('--muted')
+  };
+}
 let authorized   = true; // false once the session expires / user logs out
 let authEnabled  = false; // server tells us whether login is configured
 
@@ -177,9 +179,10 @@ function renderPlotlyChartFor(container, hist) {
   // 50 = the SVG renderer's minimum bar (4px on a 64px chart, scaled to the [0,800] axis); every bar gets at least this
   const y = hist.map(ms => ms === null ? 50 : Math.max(50, ms));
   const customdata = hist.map(ms => ms === null ? '–' : ms + 'ms');
+  const colors = plotlyColorMap();
   const markerColor = hist.map(ms => {
     const c = latencyColor(ms);
-    return plotlyColorMap[c] || '#64748b';
+    return colors[c] || '#64748b';
   });
   const data = [{
     x: x,
@@ -226,30 +229,12 @@ function renderLatencyChartFor(id) {
   }
 }
 
-// ---- Dashboard group builder (old layout per instance) ----
-
-function buildDashboardGroup(inst) {
-  const id = String(inst.id);
-  if (!/^\d+$/.test(id)) return document.createDocumentFragment();
-  const group = document.createElement('div');
-  group.className = 'dashboard-group';
-  group.id = `dashboard-${id}`;
-  group.innerHTML = `
-    <!-- Status banner -->
-    <div class="status-banner unknown" id="i${id}-banner">
-      <div class="banner-icon">&#9679;</div>
-      <div class="banner-text">
-        <span id="i${id}-banner-title">Checking VPN status…</span>
-        <span id="i${id}-banner-sub" class="muted"></span>
-      </div>
-      <div class="banner-actions">
-        <button id="i${id}-btn-start" type="button" class="btn-success">&#9654; Start</button>
-        <button id="i${id}-btn-stop" type="button" class="btn-danger">&#9209; Stop</button>
-      </div>
-    </div>
-
-    <div class="dashboard-grid" id="i${id}-grid">
-      <!-- Public IP card -->
+// ---- Dashboard cards ----
+// Markup and updates for each card live together, so an element ID cannot drift
+// between the template and the code that writes it.
+const CARD_MODULES = {
+  ip: {
+    mount: (id, inst) => `
       <div class="card" data-card-id="ip" draggable="false">
         <div class="card-header">
           <span class="card-icon">&#127760;</span>
@@ -268,9 +253,37 @@ function buildDashboardGroup(inst) {
           <div class="stat-row"><span class="stat-label">City</span><span class="stat-value" id="i${id}-ip-city">–</span></div>
           <div class="stat-row"><span class="stat-label">Organisation</span><span class="stat-value" id="i${id}-ip-org">–</span></div>
         </div>
-      </div>
+      </div>`,
+    update: (id, ctx) => {
+      const { ip, primaryIp, primaryDisplay, secondaryIp, showSecondary } = ctx;
+      const secondaryEl = document.getElementById(`i${id}-ip-secondary`);
+      const secondaryRow = secondaryEl ? secondaryEl.closest('.stat-row') : null;
+      setEl(`i${id}-ip-primary-label`, showSecondary ? ipTypeLabel(primaryIp) : 'Public IP');
+      setEl(`i${id}-ip-address`, primaryDisplay || '–');
+      if (secondaryRow) secondaryRow.style.display = showSecondary ? 'flex' : 'none';
+      if (showSecondary) {
+        setEl(`i${id}-ip-secondary-label`, secondaryIp ? ipTypeLabel(secondaryIp) : 'Secondary IP');
+        setEl(`i${id}-ip-secondary`, secondaryIp || '–');
+      }
+      setEl(`i${id}-ip-country`, ip?.country ?? '–');
+      setEl(`i${id}-ip-city`, ip?.city ?? '–');
+      setEl(`i${id}-ip-org`, ip?.org ?? ip?.organization ?? '–');
+    },
+    clear: id => {
+      setEl(`i${id}-ip-primary-label`, 'Public IP');
+      setEl(`i${id}-ip-address`, '–');
+      setEl(`i${id}-ip-country`, '–');
+      setEl(`i${id}-ip-city`, '–');
+      setEl(`i${id}-ip-org`, '–');
+      setEl(`i${id}-ip-secondary-label`, 'Secondary IP');
+      const secondaryEl = document.getElementById(`i${id}-ip-secondary`);
+      const secondaryRow = secondaryEl ? secondaryEl.closest('.stat-row') : null;
+      if (secondaryRow) secondaryRow.style.display = 'none';
+    },
+  },
 
-      <!-- VPN details card -->
+  vpn: {
+    mount: id => `
       <div class="card" data-card-id="vpn" draggable="false">
         <div class="card-header">
           <span class="card-icon">&#128274;</span>
@@ -284,9 +297,28 @@ function buildDashboardGroup(inst) {
           <div class="stat-row"><span class="stat-label">Country</span><span class="stat-value" id="i${id}-vpn-country">–</span></div>
           <div class="stat-row"><span class="stat-label">City</span><span class="stat-value" id="i${id}-vpn-city">–</span></div>
         </div>
-      </div>
+      </div>`,
+    update: (id, ctx) => {
+      const { s, d, ip } = ctx;
+      setEl(`i${id}-vpn-status`, d?.status ?? '–');
+      setEl(`i${id}-vpn-provider`, s?.provider?.name ?? '–');
+      setEl(`i${id}-vpn-protocol`, s?.type ?? '–');
+      setEl(`i${id}-vpn-country`, ip?.country ?? '–');
+      setEl(`i${id}-vpn-city`, ip?.city ?? '–');
+      updateServerSelect(id, s);
+    },
+    clear: id => {
+      setEl(`i${id}-vpn-status`, '–');
+      setEl(`i${id}-vpn-provider`, '–');
+      setEl(`i${id}-vpn-protocol`, '–');
+      setEl(`i${id}-vpn-country`, '–');
+      setEl(`i${id}-vpn-city`, '–');
+      updateServerSelect(id, null);
+    },
+  },
 
-      <!-- Port forwarding card -->
+  port: {
+    mount: id => `
       <div class="card" data-card-id="port" draggable="false">
         <div class="card-header">
           <span class="card-icon">&#128268;</span>
@@ -295,9 +327,16 @@ function buildDashboardGroup(inst) {
         <div class="card-body">
           <div class="stat-row"><span class="stat-label">Forwarded Port</span><span class="stat-value mono" id="i${id}-port-number">–</span></div>
         </div>
-      </div>
+      </div>`,
+    update: (id, ctx) => {
+      const port = ctx.health.portForwarded?.ok ? (ctx.health.portForwarded.data?.port ?? 0) : 0;
+      setEl(`i${id}-port-number`, port > 0 ? String(port) : ctx.health.portForwarded?.ok ? 'Not forwarded' : 'N/A');
+    },
+    clear: id => setEl(`i${id}-port-number`, 'N/A'),
+  },
 
-      <!-- DNS card -->
+  dns: {
+    mount: id => `
       <div class="card" data-card-id="dns" draggable="false">
         <div class="card-header">
           <span class="card-icon">&#128225;</span>
@@ -306,9 +345,16 @@ function buildDashboardGroup(inst) {
         <div class="card-body">
           <div class="stat-row"><span class="stat-label">Status</span><span class="stat-value" id="i${id}-dns-status">–</span></div>
         </div>
-      </div>
+      </div>`,
+    update: (id, ctx) => {
+      const dns = ctx.health.dnsStatus;
+      setEl(`i${id}-dns-status`, dns?.ok ? (dns.data?.status ?? 'OK') : 'Unavailable');
+    },
+    clear: id => setEl(`i${id}-dns-status`, 'Unavailable'),
+  },
 
-      <!-- History card -->
+  history: {
+    mount: id => `
       <div class="card card-wide" data-card-id="history" draggable="false">
         <div class="card-header">
           <span class="card-icon">&#128200;</span>
@@ -323,8 +369,19 @@ function buildDashboardGroup(inst) {
             <span class="dot unknown"></span> Unknown
           </div>
         </div>
-      </div>
-      ${latencyChartEnabled ? `
+      </div>`,
+    update: (id, ctx) => {
+      pushHistoryFor(id, ctx.state);
+      renderHistoryFor(id);
+    },
+    clear: id => {
+      pushHistoryFor(id, 'unknown');
+      renderHistoryFor(id);
+    },
+  },
+
+  latency: {
+    mount: id => latencyChartEnabled ? `
       <div class="card card-wide">
         <div class="card-header">
           <span class="card-icon">&#9889;</span>
@@ -342,10 +399,11 @@ function buildDashboardGroup(inst) {
             <span class="dot unknown"></span> Failed
           </div>
         </div>
-      </div>
-      ` : ''}
+      </div>` : '',
+  },
 
-      <!-- AirVPN server card -->
+  airvpn: {
+    mount: id => `
       <div class="card card-wide airvpn-card" id="i${id}-airvpn-card">
         <div class="card-header">
           <span class="card-icon">&#127758;</span>
@@ -362,8 +420,47 @@ function buildDashboardGroup(inst) {
           <div class="stat-row"><span class="stat-label">Speed</span><span class="stat-value mono" id="i${id}-airvpn-speed">–</span></div>
           <div class="stat-row"><span class="stat-label">Connected</span><span class="stat-value" id="i${id}-airvpn-connected">–</span></div>
         </div>
-      </div>
-      <!-- Generic provider card (NordVPN / Mullvad / Privado integrations) -->
+      </div>`,
+    update: (id, ctx) => {
+      const { airVpnServer, airVpnUserInfo } = ctx.health;
+      const card = document.getElementById(`i${id}-airvpn-card`);
+      if (!card) return;
+      if (!airVpnServer?.ok || airVpnServer?.data == null) {
+        card.classList.remove('visible');
+        return;
+      }
+      card.classList.add('visible');
+      const s = airVpnServer.data;
+      setEl(`i${id}-airvpn-server-name`, s.public_name || '–');
+      setEl(`i${id}-airvpn-health`, s.health === 'ok' ? 'OK' : (s.warning || s.health || '–'));
+      setEl(`i${id}-airvpn-load`, s.currentload !== undefined ? `${s.currentload}%` : '–');
+      setEl(`i${id}-airvpn-bw`, s.bw !== undefined && s.bw_max !== undefined ? `${s.bw}/${s.bw_max} Mbps` : '–');
+      setEl(`i${id}-airvpn-users`, s.users !== undefined ? String(s.users) : '–');
+      const loc = [s.location, s.country_name].filter(Boolean).join(', ');
+      setEl(`i${id}-airvpn-location`, loc || '–');
+      const nameBadge = document.getElementById(`i${id}-airvpn-server-name`);
+      if (nameBadge) nameBadge.className = s.health === 'ok' ? 'badge ok' : 'badge warn';
+
+      const conn = airVpnUserInfo?.ok ? airVpnUserInfo.data?.connection : null;
+      if (conn) {
+        const read = conn.bytes_read || 0;
+        const write = conn.bytes_write || 0;
+        setEl(`i${id}-airvpn-transfer`, `${formatBytes(read)} ↑ / ${formatBytes(write)} ↓`);
+        const spdR = conn.speed_read || 0;
+        const spdW = conn.speed_write || 0;
+        setEl(`i${id}-airvpn-speed`, `${formatBytes(spdR)}/s ↑ / ${formatBytes(spdW)}/s ↓`);
+        setEl(`i${id}-airvpn-connected`, conn.connected_since_date || '–');
+      } else {
+        setEl(`i${id}-airvpn-transfer`, '–');
+        setEl(`i${id}-airvpn-speed`, '–');
+        setEl(`i${id}-airvpn-connected`, '–');
+      }
+    },
+    clear: id => document.getElementById(`i${id}-airvpn-card`)?.classList.remove('visible'),
+  },
+
+  provider: {
+    mount: id => `
       <div class="card card-wide provider-card" id="i${id}-provider-card">
         <div class="card-header">
           <span class="card-icon">&#127760;</span>
@@ -374,15 +471,68 @@ function buildDashboardGroup(inst) {
           <div class="stat-row"><span class="stat-label">Location</span><span class="stat-value" id="i${id}-provider-location">–</span></div>
           <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value" id="i${id}-provider-load">–</span></div>
         </div>
+      </div>`,
+    update: (id, ctx) => {
+      const providerData = ctx.health.providerData;
+      const card = document.getElementById(`i${id}-provider-card`);
+      if (!card) return;
+      if (!providerData?.ok || providerData.data == null) {
+        card.classList.remove('visible');
+        return;
+      }
+      card.classList.add('visible');
+      const d = providerData.data;
+      setEl(`i${id}-provider-server-name`, d.serverName || '–');
+      setEl(`i${id}-provider-location`, d.location || '–');
+      setEl(`i${id}-provider-load`, typeof d.load === 'number' ? `${d.load}%` : '–');
+      const body = document.getElementById(`i${id}-provider-body`);
+      body?.querySelectorAll('.provider-extra').forEach(el => el.remove());
+      (d.extra || []).forEach(row => {
+        const div = document.createElement('div');
+        div.className = 'stat-row provider-extra';
+        const label = document.createElement('span');
+        label.className = 'stat-label';
+        label.textContent = row.label;
+        const value = document.createElement('span');
+        value.className = 'stat-value';
+        value.textContent = row.value ?? '–';
+        div.append(label, value);
+        body.appendChild(div);
+      });
+    },
+    clear: id => document.getElementById(`i${id}-provider-card`)?.classList.remove('visible'),
+  },
+};
+
+function cardMarkup(id, inst) {
+  return Object.values(CARD_MODULES).map(m => m.mount ? m.mount(id, inst) : '').join('');
+}
+
+function buildDashboardGroup(inst) {
+  const id = String(inst.id);
+  if (!/^\d+$/.test(id)) return document.createDocumentFragment();
+  const group = document.createElement('div');
+  group.className = 'dashboard-group';
+  group.id = `dashboard-${id}`;
+  group.innerHTML = `
+    <div class="status-banner unknown" id="i${id}-banner">
+      <div class="banner-icon">&#9679;</div>
+      <div class="banner-text">
+        <span id="i${id}-banner-title">Checking VPN status…</span>
+        <span id="i${id}-banner-sub" class="muted"></span>
+      </div>
+      <div class="banner-actions">
+        <button id="i${id}-btn-start" type="button" class="btn-success">&#9654; Start</button>
+        <button id="i${id}-btn-stop" type="button" class="btn-danger">&#9209; Stop</button>
       </div>
     </div>
+    <div class="dashboard-grid" id="i${id}-grid">${cardMarkup(id, inst)}</div>
   `;
   group.querySelector(`#i${id}-btn-start`).addEventListener('click', () => vpnAction(id, 'start'));
   group.querySelector(`#i${id}-btn-stop`).addEventListener('click', () => vpnAction(id, 'stop'));
   const serverSelect = group.querySelector(`#i${id}-server-select`);
   serverSelect.addEventListener('change', () => {
-    const selected = serverSelect.value;
-    updateServerForInstance(id, selected);
+    updateServerForInstance(id, serverSelect.value);
   });
   return group;
 }
@@ -390,8 +540,8 @@ function buildDashboardGroup(inst) {
 function renderAllDashboards() {
   const container = $('dashboards-container');
   container.innerHTML = '';
-  const cols = Math.min(instances.length, 4) || 1;
-  container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  // CSS keeps this at one column on narrow screens; the inline value only sets the desktop count.
+  container.style.setProperty('--dash-cols', Math.min(instances.length, 4) || 1);
   instances.forEach(inst => {
     container.appendChild(buildDashboardGroup(inst));
     applyLayout(inst.id);
@@ -428,6 +578,14 @@ function populateServerSelect(select, servers, vpnType) {
 }
 
 // --- Update the server dropdown for an instance's provider (fetched once per provider) ---
+function applyServerValue(select, name) {
+  if (document.activeElement === select) return;
+  if (name && !Array.from(select.options).some(o => o.value === name)) {
+    select.add(new Option(name, name));
+  }
+  select.value = name;
+}
+
 function updateServerSelect(id, s) {
   const select = document.getElementById(`i${id}-server-select`);
   if (!select) return;
@@ -457,7 +615,7 @@ function updateServerSelect(id, s) {
         serversRetryAt.delete(retryKey);
         populateServerSelect(select, data.data, vpnType);
         select.disabled = false;
-        select.value = currentName;
+        applyServerValue(select, currentName);
       })
       .catch(err => {
         console.error(`[servers][${id}]`, err.message);
@@ -468,7 +626,7 @@ function updateServerSelect(id, s) {
         select.disabled = true;
       });
   } else {
-    select.value = currentName;
+    applyServerValue(select, currentName);
   }
 }
 
@@ -476,42 +634,23 @@ function updateServerSelect(id, s) {
 
 function updatePanel(inst, health) {
   const id = inst.id;
-  const { vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings, airVpnServer, airVpnUserInfo } = health;
+  const d  = health.vpnStatus?.ok ? health.vpnStatus.data : null;
+  const s  = health.vpnSettings?.ok ? health.vpnSettings.data : null;
+  const ip = health.publicIp?.ok ? health.publicIp.data : null;
 
-  const d  = vpnStatus?.ok ? vpnStatus.data : null;
-  const s  = vpnSettings?.ok ? vpnSettings.data : null;
-  const ip = publicIp?.ok ? publicIp.data : null;
-
-  const running = d?.status === 'running';
-  const stopped = d?.status === 'stopped';
-  const state = !vpnStatus?.ok ? 'unknown'
-    : running ? 'connected'
-    : stopped ? 'paused'
+  const state = !health.vpnStatus?.ok ? 'unknown'
+    : d?.status === 'running' ? 'connected'
+    : d?.status === 'stopped' ? 'paused'
     : 'disconnected';
 
   const banner = document.getElementById(`i${id}-banner`);
   if (banner) banner.className = `status-banner ${state}`;
 
   const primaryIp   = ip?.public_ip ?? ip?.ip ?? '';
-  const autoIpv6    = health.publicIpv6?.ok ? health.publicIpv6.data?.ipv6 : null;
-  const secondaryIp = autoIpv6 || '';
+  const secondaryIp = health.publicIpv6?.ok ? (health.publicIpv6.data?.ipv6 || '') : '';
   const displayMode = inst.ipDisplayMode || 'auto';
-
-  // Show both rows in 'dual' mode, or in 'auto' when a secondary IP exists.
-  // Any other mode ('single') shows the primary row only, falling back to the
-  // secondary IP when no primary is available.
   const showSecondary = displayMode === 'dual' || (displayMode === 'auto' && !!secondaryIp);
   const primaryDisplay = showSecondary ? primaryIp : (primaryIp || secondaryIp);
-  const secondaryEl  = document.getElementById(`i${id}-ip-secondary`);
-  const secondaryRow = secondaryEl ? secondaryEl.closest('.stat-row') : null;
-
-  setEl(`i${id}-ip-primary-label`, showSecondary ? ipTypeLabel(primaryIp) : 'Public IP');
-  setEl(`i${id}-ip-address`, primaryDisplay || '–');
-  if (secondaryRow) secondaryRow.style.display = showSecondary ? 'flex' : 'none';
-  if (showSecondary) {
-    setEl(`i${id}-ip-secondary-label`, secondaryIp ? ipTypeLabel(secondaryIp) : 'Secondary IP');
-    setEl(`i${id}-ip-secondary`, secondaryIp || '–');
-  }
 
   const pubIpStr = primaryIp || '';
   let sub = '';
@@ -528,106 +667,14 @@ function updatePanel(inst, health) {
   setEl(`i${id}-banner-title`, title);
   setEl(`i${id}-banner-sub`, sub);
 
-  setEl(`i${id}-ip-country`, ip?.country ?? '–');
-  setEl(`i${id}-ip-city`, ip?.city ?? '–');
-  setEl(`i${id}-ip-org`, ip?.org ?? ip?.organization ?? '–');
-
-  setEl(`i${id}-vpn-status`,   d?.status ?? '–');
-  setEl(`i${id}-vpn-provider`, s?.provider?.name ?? '–');
-  setEl(`i${id}-vpn-protocol`, s?.type ?? '–');
-  setEl(`i${id}-vpn-server`,
-    ip?.hostname
-    ?? s?.provider?.server_selection?.hostnames?.[0]
-    ?? s?.provider?.server_selection?.names?.[0]
-    ?? '–');
-  setEl(`i${id}-vpn-country`, ip?.country ?? '–');
-  setEl(`i${id}-vpn-city`, ip?.city ?? '–');
-
-  const port = portForwarded?.ok ? (portForwarded.data?.port ?? 0) : 0;
-  setEl(`i${id}-port-number`, port > 0 ? String(port) : portForwarded?.ok ? 'Not forwarded' : 'N/A');
-
-  setEl(`i${id}-dns-status`, dnsStatus?.ok ? (dnsStatus.data?.status ?? 'OK') : 'Unavailable');
-
-  updateServerSelect(id, s);
-  // --- AirVPN server info ---
-  updateAirVpnPanel(id, health);
-  updateProviderPanel(id, health.providerData);
-
-  pushHistoryFor(id, state);
-  renderHistoryFor(id);
-}
-
-function updateAirVpnPanel(id, health) {
-  const { airVpnServer, airVpnUserInfo } = health;
-  const card = document.getElementById(`i${id}-airvpn-card`);
-  if (!card) return;
-
-  if (!airVpnServer?.ok || airVpnServer?.data == null) {
-    card.classList.remove('visible');
-    return;
-  }
-  card.classList.add('visible');
-
-  const s = airVpnServer.data;
-  setEl(`i${id}-airvpn-server-name`, s.public_name || '–');
-  setEl(`i${id}-airvpn-health`,     s.health === 'ok' ? 'OK' : (s.warning || s.health || '–'));
-  setEl(`i${id}-airvpn-load`,       s.currentload !== undefined ? `${s.currentload}%` : '–');
-  setEl(`i${id}-airvpn-bw`,         s.bw !== undefined && s.bw_max !== undefined ? `${s.bw}/${s.bw_max} Mbps` : '–');
-  setEl(`i${id}-airvpn-users`,      s.users !== undefined ? String(s.users) : '–');
-  const loc = [s.location, s.country_name].filter(Boolean).join(', ');
-  setEl(`i${id}-airvpn-location`,   loc || '–');
-
-  const nameBadge = document.getElementById(`i${id}-airvpn-server-name`);
-  if (nameBadge) {
-    nameBadge.className = s.health === 'ok' ? 'badge ok' : 'badge warn';
-  }
-
-  // Session stats from userinfo
-  const conn = airVpnUserInfo?.ok ? airVpnUserInfo.data?.connection : null;
-  if (conn) {
-    const read = conn.bytes_read || 0;
-    const write = conn.bytes_write || 0;
-    setEl(`i${id}-airvpn-transfer`, `${formatBytes(read)} ↑ / ${formatBytes(write)} ↓`);
-    const spdR = conn.speed_read || 0;
-    const spdW = conn.speed_write || 0;
-    setEl(`i${id}-airvpn-speed`, `${formatBytes(spdR)}/s ↑ / ${formatBytes(spdW)}/s ↓`);
-    setEl(`i${id}-airvpn-connected`, conn.connected_since_date || '–');
-  } else {
-    setEl(`i${id}-airvpn-transfer`, '–');
-    setEl(`i${id}-airvpn-speed`, '–');
-    setEl(`i${id}-airvpn-connected`, '–');
-  }
-}
-
-function updateProviderPanel(id, providerData) {
-  const card = document.getElementById(`i${id}-provider-card`);
-  if (!card) return;
-
-  if (!providerData?.ok || providerData.data == null) {
-    card.classList.remove('visible');
-    return;
-  }
-  card.classList.add('visible');
-
-  const d = providerData.data;
-  setEl(`i${id}-provider-server-name`, d.serverName || '–');
-  setEl(`i${id}-provider-location`, d.location || '–');
-  setEl(`i${id}-provider-load`, typeof d.load === 'number' ? `${d.load}%` : '–');
-
-  const body = document.getElementById(`i${id}-provider-body`);
-  body?.querySelectorAll('.provider-extra').forEach(el => el.remove());
-  (d.extra || []).forEach(row => {
-    const div = document.createElement('div');
-    div.className = 'stat-row provider-extra';
-    const label = document.createElement('span');
-    label.className = 'stat-label';
-    label.textContent = row.label;
-    const value = document.createElement('span');
-    value.className = 'stat-value';
-    value.textContent = row.value ?? '–';
-    div.append(label, value);
-    body.appendChild(div);
-  });
+  const ctx = { state, d, s, ip, health, primaryIp, primaryDisplay, secondaryIp, showSecondary };
+  CARD_MODULES.ip.update(id, ctx);
+  CARD_MODULES.vpn.update(id, ctx);
+  CARD_MODULES.port.update(id, ctx);
+  CARD_MODULES.dns.update(id, ctx);
+  CARD_MODULES.history.update(id, ctx);
+  CARD_MODULES.airvpn.update(id, ctx);
+  CARD_MODULES.provider.update(id, ctx);
 }
 
 function formatBytes(b) {
@@ -643,30 +690,9 @@ function updatePanelError(inst) {
   if (banner) banner.className = 'status-banner unknown';
   setEl(`i${id}-banner-title`, 'Status Unknown');
   setEl(`i${id}-banner-sub`, 'Could not reach Gluetun control API');
-  setEl(`i${id}-ip-primary-label`, 'Public IP');
-  setEl(`i${id}-ip-address`, '–');
-  setEl(`i${id}-ip-country`, '–');
-  setEl(`i${id}-ip-city`, '–');
-  setEl(`i${id}-ip-org`, '–');
-  setEl(`i${id}-vpn-status`, '–');
-  setEl(`i${id}-vpn-provider`, '–');
-  setEl(`i${id}-vpn-server`, '–');
-  setEl(`i${id}-vpn-protocol`, '–');
-  setEl(`i${id}-vpn-country`, '–');
-  setEl(`i${id}-vpn-city`, '–');
-  updateServerSelect(id, null);
-  setEl(`i${id}-port-number`, 'N/A');
-  setEl(`i${id}-dns-status`, 'Unavailable');
-  setEl(`i${id}-ip-secondary-label`, 'Secondary IP');
-  const secondaryEl = document.getElementById(`i${id}-ip-secondary`);
-  const secondaryRow = secondaryEl ? secondaryEl.closest('.stat-row') : null;
-  if (secondaryRow) secondaryRow.style.display = 'none';
-  pushHistoryFor(id, 'unknown');
-  renderHistoryFor(id);
-  const airCard = document.getElementById(`i${id}-airvpn-card`);
-  if (airCard) airCard.classList.remove('visible');
-  const provCard = document.getElementById(`i${id}-provider-card`);
-  if (provCard) provCard.classList.remove('visible');
+  ['ip', 'vpn', 'port', 'dns', 'history', 'airvpn', 'provider'].forEach(name => {
+    CARD_MODULES[name].clear(id);
+  });
 }
 
 // ---- API ----
@@ -727,6 +753,7 @@ async function vpnAction(instanceId, action) {
     const data = await res.json();
     if (data.ok) {
       showToast(`${name}: VPN ${action} command sent`, 'success');
+      clearTimeout(refreshTimer);
       setTimeout(async () => { await pollAll(); scheduleNextPoll(); }, 2000);
     } else {
       showToast(`${name}: ${data.error ?? 'Unknown error'}`, 'error', 5000);

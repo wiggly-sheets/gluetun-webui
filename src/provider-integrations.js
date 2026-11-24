@@ -13,6 +13,7 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { getConfigValue } = require('./config');
+const { createCache } = require('./cache');
 
 const PROVIDER_TTL_MS = {
   nordvpn: 5 * 60 * 1000,    // load changes often
@@ -28,7 +29,7 @@ const PROVIDER_TTL_MS = {
 const DEFAULT_TIMEOUT_MS = 4000;
 
 // ponytail: global cache keyed by URL — server lists are public data shared by all instances
-const fetchJsonCache = new Map();
+const fetchJsonCache = createCache({ staleWhileRevalidate: true });
 
 async function doFetch(url, ttlMs, timeoutMs, transform, text = false, headers = null) {
   const controller = new AbortController();
@@ -52,31 +53,13 @@ async function doFetch(url, ttlMs, timeoutMs, transform, text = false, headers =
 }
 
 async function fetchJson(url, { ttlMs, timeoutMs = DEFAULT_TIMEOUT_MS, transform = null, text = false, headers = null }) {
-  const cached = fetchJsonCache.get(url);
-  if (cached && cached.expires > Date.now()) return cached.data;      // fresh
-  if (cached && cached.data) {                                        // stale: serve now, refresh in background
-    if (!cached.refreshing) {
-      cached.refreshing = true;
-      // Fire-and-forget: never block callers on a refresh. On failure the stale
-      // entry stays, so the next call retries. Only overwrite this key — a sweep
-      // would evict sibling stale entries that stale-while-revalidate depends on.
-      doFetch(url, ttlMs, timeoutMs, transform, text, headers)
-        .then(data => fetchJsonCache.set(url, { data, expires: Date.now() + ttlMs }))
-        .catch(() => {})
-        .finally(() => { cached.refreshing = false; });
-    }
-    return cached.data;
-  }
-  if (cached && cached.promise) return cached.promise;                // in-flight: single-flight dedup
-
-  const promise = doFetch(url, ttlMs, timeoutMs, transform, text, headers);
-  // Store the in-flight promise: concurrent callers await the same fetch instead of firing their own
-  fetchJsonCache.set(url, { promise });
-  promise.then(
-    data => fetchJsonCache.set(url, { data, expires: Date.now() + ttlMs }),
-    () => fetchJsonCache.delete(url)   // failed first fetch: drop the rejected promise so the next call retries
+  // Fresh hits are synchronous; stale hits return immediately while one background
+  // refresh runs; a failed first fetch is dropped so the next call retries.
+  return fetchJsonCache.get(
+    url,
+    () => doFetch(url, ttlMs, timeoutMs, transform, text, headers),
+    ttlMs
   );
-  return promise;
 }
 
 // Match the connected server against any of the candidate names across the given fields, case-insensitively
@@ -128,7 +111,7 @@ async function mullvadFetchAccount(accountNumber) {
 // Fire-and-forget: never block the card on the account fetch. Return the cached entry
 // immediately (null on first call); the background fetch fills the cache for a later poll.
 function fetchMullvadAccount() {
-  const accountNumber = process.env.MULLVAD_ACCOUNT_NUMBER;
+  const accountNumber = getConfigValue('MULLVAD_ACCOUNT_NUMBER');
   if (!accountNumber) return null;
   if (mullvadAccountExpires > Date.now()) return mullvadAccountData;  // fresh, or negative-cached failure
   if (mullvadAccountRefreshing) return mullvadAccountData;            // in flight: return stale (or null)
@@ -180,26 +163,11 @@ async function loginCall(url, opts) {
 }
 
 // Auth token cache, one entry per provider. Tokens are credentials: never expose them in
-// cards or logs. TTL cache + single-flight (concurrent callers await the same login) +
-// negative cache (a failing login is retried after failTtlMs, not every poll).
-const tokenCache = new Map();
+// cards or logs. A failing login is negative-cached and retried after the fail TTL.
+const tokenCache = createCache({ negativeTtlMs: 5 * 60 * 1000 });
 
-function cachedToken(key, ttlMs, loginFn, failTtlMs = 5 * 60 * 1000) {
-  const cached = tokenCache.get(key);
-  if (cached && cached.failUntil > Date.now()) return null;            // recent login failure: don't hammer
-  if (cached && cached.expires > Date.now()) return cached.data;       // fresh token
-  if (cached && cached.promise) return cached.promise;                 // in-flight: single-flight dedup
-  const promise = loginFn()
-    .then(token => {
-      tokenCache.set(key, { data: token, expires: Date.now() + ttlMs });
-      return token;
-    })
-    .catch(err => {
-      tokenCache.set(key, { failUntil: Date.now() + failTtlMs });      // retry later, no error spam
-      throw err;
-    });
-  tokenCache.set(key, { promise });
-  return promise;
+function cachedToken(key, ttlMs, loginFn) {
+  return tokenCache.get(key, loginFn, ttlMs);
 }
 
 function cleanCard(card) {

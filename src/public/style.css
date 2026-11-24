@@ -133,7 +133,7 @@ main {
 .dashboards-container {
   max-width: 100%;
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(var(--dash-cols, 1), minmax(0, 1fr));
   gap: 1rem;
   padding: 0;
   margin: 0;
@@ -373,6 +373,7 @@ main.hidden { display: none; }
 /* ---- Responsive ---- */
 @media (max-width: 600px) {
   .header-inner { flex-direction: column; align-items: flex-start; }
+  .dashboards-container { grid-template-columns: 1fr; }
   .dashboard-group { padding: 1rem 0.75rem; }
   .dashboard-grid { grid-template-columns: 1fr; }
   .banner-actions { flex-direction: column; }

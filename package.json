@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "vitest run test/server.test.js && node --test test/speedtest.test.js && node src/provider-integrations.test.js"
+    "test": "vitest run test/server.test.js && node --test test/speedtest.test.js test/health.test.js test/cache.test.js && node src/provider-integrations.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

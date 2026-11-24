@@ -317,9 +317,9 @@ Each instance can have different authentication:
 
 ### Docker Secrets
 
-Most configuration values can be supplied as Docker secrets instead of environment variables. The app reads `/run/secrets/<name>` first and falls back to the environment. The secret name is the lowercase variable name, for example `gluetun_1_api_key`, `gluetun_1_password`, `airvpn_api_key`, `webui_user`, or `webui_password`.
+Most configuration values can be supplied as Docker secrets instead of environment variables. The app reads `/run/secrets/<name>` first and falls back to the environment. The secret name is the lowercase variable name, for example `gluetun_1_api_key`, `gluetun_1_password`, `airvpn_api_key`, `mullvad_account_number`, `surfshark_user`, `protonvpn_password`, `webui_user`, or `webui_password`.
 
-The remaining feature flags (`PORT`, `TRUST_PROXY`, `ALLOWED_HOSTS`, `LATENCY_CHART`, `LATENCY_CHART_RENDERER`, `DEFAULT_POLL_INTERVAL`, `SPEEDTEST_*`, `MULLVAD_ACCOUNT_NUMBER`) are read from environment variables only.
+The remaining feature flags (`PORT`, `TRUST_PROXY`, `ALLOWED_HOSTS`, `LATENCY_CHART`, `LATENCY_CHART_RENDERER`, `DEFAULT_POLL_INTERVAL`, `SPEEDTEST_*`) are read from environment variables only.
 
 ---
 
@@ -339,7 +339,7 @@ secrets:
   - webui_password
 ```
 
-When enabled, all `/api/*` routes except `POST /api/login`, `GET /api/auth`, and `GET /api/healthz` require a signed session cookie. Log in via the UI, or sign out with the **Log out** button in the header. Sessions last 7 days and are invalidated if the password changes. Logout invalidates sessions only until the server restarts, since the session version counter is kept in memory.
+When enabled, all `/api/*` routes except `POST /api/login`, `POST /api/logout`, `GET /api/auth`, and `GET /api/healthz` require a signed session cookie. Log in via the UI, or sign out with the **Log out** button in the header. Sessions last 7 days and are invalidated if the password changes. Logout invalidates sessions only until the server restarts, since the session version counter is kept in memory.
 
 > **Docker HEALTHCHECK:** use `http://localhost:3000/api/healthz` (public, no sensitive data) — `/api/health` is protected and returns 401 when auth is enabled.
 
@@ -364,9 +364,10 @@ gluetun-webui:
   environment:
     - GLUETUN_CONTROL_URL=http://gluetun:8000
     - TRUST_PROXY=true  # Required for reverse proxies
+    - ALLOWED_HOSTS=your.domain.com  # Host header allowlist; required for the proxy domain
 ```
 
-This allows the app to correctly parse `X-Forwarded-For` and related headers for accurate rate limiting and IP detection. **Note:** Only enable this if you're actually behind a reverse proxy, as it trusts proxy headers from your reverse proxy.
+This allows the app to correctly parse `X-Forwarded-For` and related headers for accurate rate limiting and IP detection. Set `ALLOWED_HOSTS` to the hostname browsers use, or every request is rejected by the Host allowlist. **Note:** Only enable `TRUST_PROXY` if you're actually behind a reverse proxy, as it trusts proxy headers from your reverse proxy.
 
 ### Reverse-proxy authentication
 
@@ -389,6 +390,9 @@ location / {
   auth_basic "Restricted";
   auth_basic_user_file /etc/nginx/.htpasswd;
   proxy_pass http://localhost:3000;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 ```
 Generate a password file with: `htpasswd -c /etc/nginx/.htpasswd user`

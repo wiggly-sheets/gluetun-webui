@@ -67,6 +67,17 @@ describe('GET /api/:instanceId/health', () => {
   });
 });
 
+describe('mutating API requests', () => {
+  it('rejects a cross-origin request', async () => {
+    const res = await request(app)
+      .post('/api/login')
+      .set('Origin', 'https://evil.example')
+      .send({ username: 'a', password: 'b' });
+    expect(res.status).toBe(403);
+    expect(res.body.ok).toBe(false);
+  });
+});
+
 describe('GET /api/:instanceId/servers', () => {
   it('rejects missing, malformed, and repeated provider params', async () => {
     const cases = [
@@ -90,12 +101,10 @@ describe('PUT /api/:instanceId/vpn/:action', () => {
     expect(res.body.error).toBe('Unknown instance ID');
   });
 
-  it('rejects unsupported actions on per-instance and legacy routes', async () => {
-    for (const url of ['/api/1/vpn/restart', '/api/vpn/restart']) {
-      const res = await request(app).put(url);
-      expect(res.status, url).toBe(400);
-      expect(res.body.error, url).toMatch(/Invalid action/);
-    }
+  it('rejects unsupported actions on the per-instance route', async () => {
+    const res = await request(app).put('/api/1/vpn/restart');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Invalid action/);
   });
 });
 

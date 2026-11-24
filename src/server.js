@@ -4,9 +4,13 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { providerIntegrations } = require('./provider-integrations');
-const { getConfigValue } = require('./config');
+const { createHealthService, sanitizeVpnSettings } = require('./health');
+const { createCache } = require('./cache');
+const { loadSettings, parseInstances } = require('./settings');
 
 const SPEEDTEST_ENABLED = process.env.SPEEDTEST_ENABLED === 'true';
+const INDEX_TEMPLATE = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+const DEFAULT_POLL_INTERVAL = process.env.DEFAULT_POLL_INTERVAL || '';
 
 const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? 1 : false);
@@ -15,80 +19,19 @@ const PORT = process.env.PORT || 3000;
 const LATENCY_CHART = process.env.LATENCY_CHART !== 'false';
 const LATENCY_CHART_RENDERER = process.env.LATENCY_CHART_RENDERER === 'plotly' ? 'plotly' : 'svg';
 
-// --- Multi-instance configuration ---
-// Define multiple gluetun instances via numbered env vars:
-//   GLUETUN_1_URL, GLUETUN_1_NAME, GLUETUN_1_API_KEY, GLUETUN_1_USER, GLUETUN_1_PASSWORD
-//   GLUETUN_2_URL, GLUETUN_2_NAME, ...
-// Or via Docker secrets: gluetun_1_url, gluetun_1_api_key, etc.
-// Falls back to legacy single-instance vars (GLUETUN_CONTROL_URL, GLUETUN_API_KEY, etc.)
-
-function parseInstances() {
-  const sharedAirVpnApiKey = getConfigValue('AIRVPN_API_KEY', 'airvpn_api_key');
-  const list = [];
-  for (let i = 1; i <= 20; i++) {
-    const url = getConfigValue(`GLUETUN_${i}_URL`, `gluetun_${i}_url`);
-    if (!url) continue;
-    try {
-      new URL(url);
-    } catch (err) {
-      console.error(`[startup] Invalid GLUETUN_${i}_URL: ${url}`);
-      process.exit(1);
-    }
-    list.push({
-      id: String(i),
-      name: getConfigValue(`GLUETUN_${i}_NAME`, `gluetun_${i}_name`) || `Instance ${i}`,
-      url: url.replace(/\/$/, ''),
-      apiKey:   getConfigValue(`GLUETUN_${i}_API_KEY`, `gluetun_${i}_api_key`),
-      user:     getConfigValue(`GLUETUN_${i}_USER`, `gluetun_${i}_user`),
-      password: getConfigValue(`GLUETUN_${i}_PASSWORD`, `gluetun_${i}_password`),
-      ipDisplayMode:    getConfigValue(`GLUETUN_${i}_IP_DISPLAY_MODE`,    `gluetun_${i}_ip_display_mode`)    || 'auto',
-      airVpnApiKey: getConfigValue(`GLUETUN_${i}_AIRVPN_API_KEY`, `gluetun_${i}_airvpn_api_key`) || sharedAirVpnApiKey,
-      forwardedPort: getConfigValue(`GLUETUN_${i}_FORWARDED_PORT`, `gluetun_${i}_forwarded_port`) || getConfigValue('FORWARDED_PORT', 'forwarded_port'),
-    });
-  }
-  if (list.length === 0) {
-    // Legacy single-instance fallback
-    const legacyUrl = getConfigValue('GLUETUN_CONTROL_URL', 'gluetun_control_url') || 'http://gluetun:8000';
-    // Validate URL at startup (fail-fast)
-    try {
-      new URL(legacyUrl);
-    } catch (err) {
-      console.error(`[startup] Invalid GLUETUN_CONTROL_URL: ${legacyUrl}`);
-      process.exit(1);
-    }
-    list.push({
-      id: '1',
-      name: getConfigValue('GLUETUN_NAME', 'gluetun_name') || 'Gluetun',
-      url: legacyUrl.replace(/\/$/, ''),
-      apiKey:   getConfigValue('GLUETUN_API_KEY', 'gluetun_api_key'),
-      user:     getConfigValue('GLUETUN_USER', 'gluetun_user'),
-      password: getConfigValue('GLUETUN_PASSWORD', 'gluetun_password'),
-      ipDisplayMode:    getConfigValue('GLUETUN_IP_DISPLAY_MODE',    'gluetun_ip_display_mode')    || 'auto',
-      airVpnApiKey: sharedAirVpnApiKey,
-      forwardedPort: getConfigValue('FORWARDED_PORT', 'forwarded_port'),
-    });
-  }
-  return list;
-}
-
-const instances = parseInstances();
+const settings = loadSettings();
+const instances = settings.instances;
 const instanceMap = new Map(instances.map(inst => [inst.id, inst]));
 
-// Server list cache: provider -> { fetchedAt, servers } (TTL 1h)
-const serversCache = new Map();
+// Server list cache: provider -> servers (TTL 1h, one upstream fetch at a time)
 const SERVERS_TTL = 60 * 60 * 1000;
+const serversCache = createCache({ ttlMs: SERVERS_TTL, maxEntries: 50 });
 
 // --- Optional Web UI authentication ---
 // Opt-in: enabled only when BOTH WEBUI_USER and WEBUI_PASSWORD are set (env var or Docker secret webui_user/webui_password).
 // Sessions are an HMAC-signed cookie derived from the password with scrypt (no extra config;
 // a password change invalidates all sessions, and a stolen cookie cannot cheaply guess the password).
-const webuiUser     = getConfigValue('WEBUI_USER', 'webui_user');
-const webuiPassword = getConfigValue('WEBUI_PASSWORD', 'webui_password');
-if (Boolean(webuiUser) !== Boolean(webuiPassword)) {
-  console.error('[startup] Misconfiguration: WEBUI_USER and WEBUI_PASSWORD must be set together to enable authentication');
-  process.exit(1);
-}
-const authEnabled = Boolean(webuiUser && webuiPassword);
+const { enabled: authEnabled, user: webuiUser, password: webuiPassword } = settings.auth;
 const SESSION_COOKIE = 'webui_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const sessionSigningKey = crypto.scryptSync(String(webuiPassword ?? ''), 'gluetun-webui-session-v1', 32);
@@ -142,7 +85,7 @@ function sessionCookieOptions(req) {
 // When auth is disabled this is a no-op pass-through.
 function requireAuth(req, res, next) {
   if (!authEnabled) return next();
-  if (['/login', '/auth', '/healthz'].includes(req.path)) return next();
+  if (['/login', '/logout', '/auth', '/healthz'].includes(req.path)) return next();
   if (verifySessionCookie(getSessionCookie(req))) return next();
   res.status(401).json({ error: 'Unauthorized' });
 }
@@ -163,10 +106,10 @@ function resolveInstance(id) {
 }
 
 // General read rate limiter (covers all /api/* GET routes)
-// Max assumes worst case: 20 instances polled every 5s (240/min) plus UI calls.
 const readLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 600,
+  // Worst case: 20 instances at 5s from three tabs (720/min) plus UI calls.
+  max: 1200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: 'Too many requests, please try again later.' },
@@ -228,6 +171,31 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: '2kb' }));
+
+// Reject cross-site mutations. Sec-Fetch-Site is exact (scheme, host, port); Origin is the
+// fallback and is checked against the Host allowlist so a proxy may rewrite Host. Requests
+// without either header (curl) keep working; SameSite=Lax also covers cookies.
+app.use('/api/', (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  // Modern browsers send Sec-Fetch-Site: exact same-origin includes scheme and port,
+  // and it survives a proxy that rewrites Host (e.g. nginx proxy_pass default).
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (fetchSite) {
+    if (fetchSite === 'same-origin') return next();
+    return res.status(403).json({ ok: false, error: 'Cross-origin request blocked' });
+  }
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  let originHostname;
+  try { originHostname = new URL(origin).hostname.toLowerCase(); }
+  catch (_) { return res.status(403).json({ ok: false, error: 'Cross-origin request blocked' }); }
+  // Compare against the configured host allowlist rather than Host: a reverse proxy may
+  // rewrite Host, while an attacker origin is still not a host this app serves.
+  if (!allowedHosts.has(originHostname)) {
+    return res.status(403).json({ ok: false, error: 'Cross-origin request blocked' });
+  }
+  next();
+});
 app.use(uiLimiter, express.static(path.join(__dirname, 'public'), {
   index: false,
 }));
@@ -260,204 +228,7 @@ async function gluetunFetch(instance, endpoint, method = 'GET', body = null) {
   }
 }
 
-// --- AirVPN API helpers ---
-
-// ponytail: global cache, keyed by service (status is public data shared by all instances). TTL 2min.
-const airVpnCache = new Map();
-
-async function airVpnFetch(apiKey, service, ttlMs = 120000) {
-  // status needs no API key — cache once for all instances instead of once per apiKey
-  const cacheKey = service === 'status' ? `public:${service}` : `${apiKey || 'public'}:${service}`;
-  const cached = airVpnCache.get(cacheKey);
-  if (cached && cached.expires > Date.now()) return cached.data;
-
-  const params = new URLSearchParams({ service, format: 'json' });
-  if (apiKey) params.set('key', apiKey);
-  const url = `https://airvpn.org/api/?${params}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 4000);
-
-  try {
-    const res = await fetch(url, { signal: controller.signal, redirect: 'error' });
-    if (!res.ok) throw new Error(`AirVPN returned ${res.status}`);
-    const data = await res.json();
-    // Only overwrite this key — a sweep would evict sibling stale entries that stale-while-revalidate depends on
-    airVpnCache.set(cacheKey, { data, expires: Date.now() + ttlMs });
-    return data;
-  } catch (err) {
-    // stale-while-revalidate: serve the stale entry on upstream failure
-    if (cached) return cached.data;
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-// --- Helper: strip VPN credentials from settings before sending to the browser ---
-// Gluetun's /v1/vpn/settings includes private keys, pre-shared keys and OpenVPN
-// credentials. The UI only needs protocol, provider name and server selection.
-function sanitizeVpnSettings(data) {
-  if (!data || typeof data !== 'object') return data;
-  const ss = data.provider?.server_selection || {};
-  return {
-    type: data.type,
-    provider: {
-      name: data.provider?.name,
-      server_selection: { names: ss.names, hostnames: ss.hostnames, vpn: ss.vpn },
-    },
-  };
-}
-
-// --- Helper: aggregate health for one instance ---
-// Returns { timestamp, vpnStatus, publicIp, publicIpv6, portForwarded, dnsStatus, vpnSettings, allFailed }
-// allFailed = true if ALL checks failed (service is completely unreachable)
-
-// instanceId -> lowercased gluetun provider name, learned from vpnSettings each successful poll.
-// The provider adapter fetch for a poll is gated on the *previous* poll's provider, so the
-// first poll of each instance has no provider fetch (card appears from the second poll).
-// ponytail: never evicts — max 20 instances, one string each; a stale entry only matters if
-// an instance ID is removed and later reused by a different provider. Delete on removal if that ever happens.
-const instanceProviderCache = new Map();
-async function fetchInstanceHealth(instance) {
-  const hasAirVpn = Boolean(instance.airVpnApiKey);
-  const adapter = providerIntegrations[instanceProviderCache.get(instance.id)] || null;
-  // All upstream fetches in one parallel batch: gluetun (5s timeout) + AirVPN status/userinfo (4s timeout) + provider list (4s/15s timeout)
-  const results = await Promise.allSettled([
-    gluetunFetch(instance, '/v1/vpn/status'),
-    gluetunFetch(instance, '/v1/publicip/ip'),
-    gluetunFetch(instance, '/v1/portforward'),
-    gluetunFetch(instance, '/v1/dns/status'),
-    gluetunFetch(instance, '/v1/vpn/settings'),
-    hasAirVpn ? airVpnFetch(instance.airVpnApiKey, 'status') : Promise.resolve(null),
-    hasAirVpn ? airVpnFetch(instance.airVpnApiKey, 'userinfo') : Promise.resolve(null),
-    adapter ? adapter.fetchServerList() : Promise.resolve(null),
-  ]);
-  results.forEach((r, i) => {
-    if (r.status === 'rejected') console.error(`[${i < 5 ? 'upstream' : i < 7 ? 'airvpn' : 'provider'}][${instance.id}]`, r.reason?.message);
-  });
-  const [vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings, airVpnStatus, airVpnUserinfo, providerList] = results.map(r =>
-    r.status === 'fulfilled' ? { ok: true, data: r.value } : { ok: false, error: 'Upstream error' }
-  );
-  const allFailed = [vpnStatus, publicIp, portForwarded, dnsStatus, vpnSettings].every(r => !r.ok);
-
-  // Learn the provider for the next poll
-  if (vpnSettings.ok && vpnSettings.data?.provider?.name) {
-    instanceProviderCache.set(instance.id, String(vpnSettings.data.provider.name).toLowerCase());
-  }
-
-  // Merge env var forwarded port when Gluetun returns 0 (AirVPN doesn't write to status file)
-  const envPort = Number(instance.forwardedPort);
-  if (portForwarded.ok && portForwarded.data && portForwarded.data.port === 0 && envPort > 0) {
-    portForwarded.data.port = envPort;
-    if (!portForwarded.data.ports || portForwarded.data.ports.length === 0) {
-      portForwarded.data.ports = [envPort];
-    }
-  }
-
-  // IPv6 is refreshed in the background and cached (5 min TTL) — never blocks the health poll
-  const cachedIpv6 = ipv6Cache.value;
-  fetchPublicIpv6(); // fire-and-forget; result lands in the cache for the next poll
-  const publicIpv6 = cachedIpv6 ? { ok: true, data: cachedIpv6 } : { ok: false, error: 'Not available' };
-
-  let airVpnServer = null;
-  let airVpnUserInfo = null;
-
-  // Match current server by userinfo session server_name; if that fails (renamed/stale server),
-  // fall back to the vpnSettings server name instead of hiding the card
-  if (airVpnStatus.ok && airVpnStatus.data?.servers) {
-    const servers = airVpnStatus.data.servers;
-    const candidates = [
-      airVpnUserinfo.ok ? airVpnUserinfo.data?.connection?.server_name : null,
-      vpnSettings?.ok ? vpnSettings.data?.provider?.server_selection?.names?.[0] : null,
-    ];
-    for (const name of candidates) {
-      if (!name) continue;
-      const found = servers.find(s => s.public_name === name);
-      if (found) { airVpnServer = found; break; }
-    }
-  }
-
-  // Privacy: only expose the userinfo connection field to the browser (no login/credits/sessions)
-  if (airVpnUserinfo.ok) {
-    airVpnUserInfo = { connection: airVpnUserinfo.data?.connection ?? null };
-  }
-
-  // Generic provider card: match the connected server against the provider's live list
-  let providerData = null;
-  if (adapter) {
-    if (!providerList.ok) {
-      providerData = { ok: false };
-    } else {
-      try {
-        // gluetun may store the display name or hostname in server_selection; the publicIp
-        // hostname (already fetched in the batch) is the actual connected server as a fallback.
-        // Hostnames are stable identifiers — try them first, since a display name can be
-        // reassigned to a different server by the provider.
-        const ss = vpnSettings.ok ? vpnSettings.data?.provider?.server_selection : null;
-        const candidates = [
-          ss?.hostnames?.[0],
-          ss?.names?.[0],
-          publicIp.ok ? publicIp.data?.hostname : null,
-        ].filter(Boolean);
-        const matched = candidates.length ? adapter.matchServer(providerList.data, candidates) : null;
-        const card = await adapter.buildCard(providerList.data, matched);
-        providerData = { ok: true, data: card || null };
-      } catch (err) {
-        console.error(`[provider][${instance.id}]`, err.message);
-        providerData = { ok: false };
-      }
-    }
-  }
-
-  return {
-    timestamp: new Date().toISOString(),
-    vpnStatus, publicIp, publicIpv6, portForwarded, dnsStatus,
-    vpnSettings: vpnSettings.ok
-      ? { ok: true, data: sanitizeVpnSettings(vpnSettings.data) }
-      : vpnSettings,
-    airVpnServer: airVpnServer ? { ok: true, data: airVpnServer } : { ok: false },
-    airVpnUserInfo: airVpnUserInfo ? { ok: true, data: airVpnUserInfo } : { ok: false },
-    providerData,
-    allFailed,
-  };
-}
-
-// --- Public IPv6 (best-effort, cached, background refresh) ---
-// NOTE: detected from the webui container's egress, not Gluetun's tunnel.
-// Route the webui through Gluetun (network_mode: service:gluetun) for the
-// VPN exit IPv6; otherwise this is the host's own IPv6 (or none).
-const IPV6_CACHE_TTL_MS = 5 * 60 * 1000;
-let ipv6Cache = { value: null, fetchedAt: 0 };
-let ipv6InFlight = null;
-
-async function fetchPublicIpv6() {
-  if (Date.now() - ipv6Cache.fetchedAt < IPV6_CACHE_TTL_MS) return ipv6Cache.value;
-  if (ipv6InFlight) return ipv6InFlight;
-  ipv6InFlight = (async () => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    try {
-      const res = await fetch('https://api6.ipify.org?format=json', {
-        signal: controller.signal,
-        redirect: 'error',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const value = data.ip && data.ip.includes(':') ? { ipv6: data.ip } : null;
-      ipv6Cache = { value, fetchedAt: Date.now() };
-      return value;
-    } catch (_) {
-      // Stamp failures too, so an unavailable IPv6 endpoint is retried on the
-      // cache TTL instead of on every poll.
-      ipv6Cache = { value: ipv6Cache.value, fetchedAt: Date.now() };
-      return null;
-    } finally {
-      clearTimeout(timeoutId);
-      ipv6InFlight = null;
-    }
-  })();
-  return ipv6InFlight;
-}
+const healthService = createHealthService({ fetchGluetun: gluetunFetch });
 
 // --- Feature config endpoint ---
 app.get('/api/config', (req, res) => {
@@ -475,7 +246,7 @@ app.get('/api/instances', (req, res) => {
 app.get('/api/:instanceId/health', async (req, res) => {
   const instance = resolveInstance(req.params.instanceId);
   if (!instance) return res.status(400).json({ ok: false, error: 'Unknown instance ID' });
-  const health = await fetchInstanceHealth(instance);
+  const health = await healthService.getHealth(instance);
   // Return 503 if all upstream checks failed (service completely unreachable)
   if (health.allFailed) {
     return res.status(503).json({ ok: false, error: 'Service unavailable', ...health });
@@ -485,43 +256,12 @@ app.get('/api/:instanceId/health', async (req, res) => {
 
 // --- Legacy aggregate health (instance 1) ---
 app.get('/api/health', async (req, res) => {
-  const health = await fetchInstanceHealth(instances[0]);
+  const health = await healthService.getHealth(instances[0]);
   // Return 503 if all upstream checks failed (service completely unreachable)
   if (health.allFailed) {
     return res.status(503).json({ ok: false, error: 'Service unavailable', ...health });
   }
   res.json({ ok: true, ...health });
-});
-
-// --- Legacy individual proxy endpoints (instance 1) ---
-app.get('/api/status', async (req, res) => {
-  try {
-    const data = await gluetunFetch(instances[0], '/v1/vpn/status');
-    res.json({ ok: true, data });
-  } catch (err) {
-    console.error('[upstream]', err.message);
-    res.status(502).json({ ok: false, error: 'Upstream error' });
-  }
-});
-
-app.get('/api/publicip', async (req, res) => {
-  try {
-    const data = await gluetunFetch(instances[0], '/v1/publicip/ip');
-    res.json({ ok: true, data });
-  } catch (err) {
-    console.error('[upstream]', err.message);
-    res.status(502).json({ ok: false, error: 'Upstream error' });
-  }
-});
-
-app.get('/api/portforwarded', async (req, res) => {
-  try {
-    const data = await gluetunFetch(instances[0], '/v1/portforward');
-    res.json({ ok: true, data });
-  } catch (err) {
-    console.error('[upstream]', err.message);
-    res.status(502).json({ ok: false, error: 'Upstream error' });
-  }
 });
 
 app.put('/api/:instanceId/settings', settingsLimiter, async (req, res) => {
@@ -534,6 +274,7 @@ app.put('/api/:instanceId/settings', settingsLimiter, async (req, res) => {
       'PUT',
       req.body
     );
+    healthService.invalidate(instance.id);
     res.json({ ok: true, data });
   } catch (err) {
     console.error('[upstream]', err.message);
@@ -554,45 +295,34 @@ app.get('/api/:instanceId/servers', async (req, res) => {
   const provider = req.query.provider.trim().toLowerCase();
   if (!provider) return res.status(400).json({ ok: false, error: 'Missing provider query param' });
   if (!/^[a-z0-9 _-]+$/.test(provider)) return res.status(400).json({ ok: false, error: 'Invalid provider' });
-  const cached = serversCache.get(provider);
-  if (cached && Date.now() - cached.fetchedAt < SERVERS_TTL) {
-    return res.json({ ok: true, data: cached.servers });
-  }
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
   try {
-    const upstream = await fetch(
-      `https://raw.githubusercontent.com/qdm12/gluetun-servers/main/pkg/servers/${encodeURIComponent(provider)}.json`,
-      { signal: controller.signal, redirect: 'error' }
-    );
-    if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
-    const data = await upstream.json();
-    if (!Array.isArray(data.servers)) throw new Error('Malformed server list');
-    // Gluetun server lists use `hostname`; the UI expects `server_name`.
-    const servers = data.servers.map(s => ({
-      server_name: s.server_name ?? s.hostname ?? s.name,
-      country: s.country,
-      vpn: s.vpn,
-    })).filter(s => s.server_name);
-    serversCache.set(provider, { fetchedAt: Date.now(), servers });
+    const servers = await serversCache.get(provider, async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      try {
+        const upstream = await fetch(
+          `https://raw.githubusercontent.com/qdm12/gluetun-servers/main/pkg/servers/${encodeURIComponent(provider)}.json`,
+          { signal: controller.signal, redirect: 'error' }
+        );
+        if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
+        const data = await upstream.json();
+        if (!Array.isArray(data.servers)) throw new Error('Malformed server list');
+        // Gluetun server lists use `hostname`; the UI expects `server_name`.
+        return data.servers.map(s => ({
+          server_name: s.server_name ?? s.hostname ?? s.name,
+          country: s.country,
+          vpn: s.vpn,
+        })).filter(s => s.server_name);
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    });
     res.json({ ok: true, data: servers });
   } catch (err) {
     console.error('[servers]', err.message);
     res.status(502).json({ ok: false, error: 'Could not fetch server list' });
-  } finally {
-    clearTimeout(timeoutId);
   }
 });
-app.get('/api/dns', async (req, res) => {
-  try {
-    const data = await gluetunFetch(instances[0], '/v1/dns/status');
-    res.json({ ok: true, data });
-  } catch (err) {
-    console.error('[upstream]', err.message);
-    res.status(502).json({ ok: false, error: 'Upstream error' });
-  }
-});
-
 const vpnActionLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
@@ -617,30 +347,10 @@ app.put('/api/:instanceId/vpn/:action', vpnActionLimiter, async (req, res) => {
       'PUT',
       { status: action === 'start' ? 'running' : 'stopped' }
     );
+    healthService.invalidate(instance.id);
     res.json({ ok: true, data });
   } catch (err) {
     console.error(`[upstream][${instance.id}]`, err.message);
-    res.status(502).json({ ok: false, error: 'Upstream error' });
-  }
-});
-
-// --- Legacy VPN control (instance 1) ---
-app.put('/api/vpn/:action', vpnActionLimiter, async (req, res) => {
-  const { action } = req.params;
-  const allowed = ['start', 'stop'];
-  if (!allowed.includes(action)) {
-    return res.status(400).json({ ok: false, error: 'Invalid action. Use start or stop.' });
-  }
-  try {
-    const data = await gluetunFetch(
-      instances[0],
-      '/v1/vpn/status',
-      'PUT',
-      { status: action === 'start' ? 'running' : 'stopped' }
-    );
-    res.json({ ok: true, data });
-  } catch (err) {
-    console.error('[upstream]', err.message);
     res.status(502).json({ ok: false, error: 'Upstream error' });
   }
 });
@@ -673,7 +383,8 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 });
 
 app.post('/api/logout', (req, res) => {
-  sessionVersion++; // invalidate all previously issued cookies
+  // Only a valid session may invalidate every cookie; an expired one just clears its own.
+  if (authEnabled && verifySessionCookie(getSessionCookie(req))) sessionVersion++;
   res.clearCookie(SESSION_COOKIE, { path: '/' });
   res.json({ ok: true });
 });
@@ -782,11 +493,7 @@ if (SPEEDTEST_ENABLED) {
 app.use('/api/', (req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
 
 app.get('/{*splat}', uiLimiter, (req, res) => {
-  const filePath = path.join(__dirname, 'public', 'index.html');
-  let html = fs.readFileSync(filePath, 'utf8');
-  const defaultInterval = process.env.DEFAULT_POLL_INTERVAL || '';
-  html = html.replace('{{DEFAULT_POLL_INTERVAL}}', defaultInterval);
-  res.send(html);
+  res.send(INDEX_TEMPLATE.replace('{{DEFAULT_POLL_INTERVAL}}', DEFAULT_POLL_INTERVAL));
 });
 
 // Global error handler – catches synchronous throws and next(err) calls
