@@ -329,8 +329,12 @@ const CARD_MODULES = {
         </div>
       </div>`,
     update: (id, ctx) => {
-      const port = ctx.health.portForwarded?.ok ? (ctx.health.portForwarded.data?.port ?? 0) : 0;
-      setEl(`i${id}-port-number`, port > 0 ? String(port) : ctx.health.portForwarded?.ok ? 'Not forwarded' : 'N/A');
+      const data = ctx.health.portForwarded?.ok ? ctx.health.portForwarded.data : null;
+      const port = data?.port ?? 0;
+      const configured = data?.source === 'env';
+      setEl(`i${id}-port-number`, port > 0
+        ? `${port}${configured ? ' (configured)' : ''}`
+        : ctx.health.portForwarded?.ok ? 'Not forwarded' : 'N/A');
     },
     clear: id => setEl(`i${id}-port-number`, 'N/A'),
   },

@@ -146,6 +146,7 @@ function createHealthService({ fetchGluetun, fetchImpl = (...args) => fetch(...a
     const envPort = Number(instance.forwardedPort);
     if (portForwarded.ok && portForwarded.data && portForwarded.data.port === 0 && envPort > 0) {
       portForwarded.data.port = envPort;
+      portForwarded.data.source = 'env';
       if (!portForwarded.data.ports || portForwarded.data.ports.length === 0) {
         portForwarded.data.ports = [envPort];
       }
