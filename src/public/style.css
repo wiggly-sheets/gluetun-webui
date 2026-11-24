@@ -294,8 +294,8 @@ main {
 }
 .latency-chart { min-height: 64px; }
 .latency-chart svg { height: 64px; }
-.latency-chart rect { cursor: default; transition: opacity 0.15s; }
-.latency-chart rect:hover { opacity: 1 !important; }
+.latency-chart circle { cursor: default; }
+.latency-chart polyline { pointer-events: none; }
 
 /* ---- Toast ---- */
 .toast {

@@ -4,7 +4,6 @@ const MAX_HISTORY = 30;
 const VALID_STATES = new Set(['connected', 'paused', 'disconnected', 'unknown']);
 const LATENCY_GOOD_MS = 150;
 const LATENCY_WARN_MS = 400;
-const MAX_LATENCY_DISPLAY_MS = 800;
 const STORAGE_INTERVAL_KEY = 'gluetun-poll-interval';
 
 let instances    = [];   // [{ id, name }] from /api/instances
@@ -138,25 +137,74 @@ function latencyColor(ms) {
   return 'var(--red)';
 }
 
+// Scale to the observed peak (with headroom) instead of a fixed 0-800ms axis, so low
+// latencies still show their variation.
+function latencyAxisMax(hist) {
+  const values = hist.filter(Number.isFinite);
+  if (values.length === 0) return 100;
+  const padded = Math.max(...values) * 1.15;
+  const step = padded <= 10 ? 1 : padded <= 50 ? 5 : padded <= 200 ? 25 : padded <= 1000 ? 50 : 250;
+  return Math.max(1, Math.ceil(padded / step) * step);
+}
+
+// Three labels, picked from the same axis maximum as the plotted scale: 0, a rounded
+// midpoint and the top. The midpoint keeps the labels useful as the peak moves.
+function latencyTicks(axisMax) {
+  const raw = axisMax / 2;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  const norm = raw / pow;
+  const step = Math.max(1, (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * pow);
+  let mid = Math.round(raw / step) * step;
+  // The rounded step can land exactly on the top (for example 0/50/50); fall back to a
+  // plain halfway label so every scale with room for three ticks gets three labels.
+  if (mid <= 0 || mid >= axisMax) mid = Math.round(axisMax / 2);
+  const ticks = [0];
+  if (mid > 0 && mid < axisMax) ticks.push(mid);
+  ticks.push(axisMax);
+  return ticks;
+}
+
 function renderSvgChartFor(container, hist) {
   const W = container.clientWidth || 600;
   const H = 64;
-  const BAR_GAP = 2;
-  const barW = Math.max(2, Math.floor((W - BAR_GAP) / MAX_HISTORY) - BAR_GAP);
-  const cols = Math.floor((W + BAR_GAP) / (barW + BAR_GAP));
-  const slice = hist.slice(-cols);
-  const svgW = slice.length * (barW + BAR_GAP);
+  const PAD_TOP = 6;
+  const PAD_BOTTOM = 6;
+  const LEFT = 38;
+  const RIGHT = 4;
+  const axisMax = latencyAxisMax(hist);
+  const plotH = H - PAD_TOP - PAD_BOTTOM;
+  const plotW = W - LEFT - RIGHT;
+  const xAt = i => hist.length === 1 ? LEFT + plotW / 2 : LEFT + (i / (hist.length - 1)) * plotW;
+  const yAt = ms => PAD_TOP + plotH - (Math.max(0, Math.min(ms, axisMax)) / axisMax) * plotH;
 
-  const bars = slice.map((ms, i) => {
-    const height = ms === null
-      ? 4
-      : Math.max(4, Math.round((ms / MAX_LATENCY_DISPLAY_MS) * H));
-    const y = H - height;
-    const color = latencyColor(ms);
-    return `<rect x="${i * (barW + BAR_GAP)}" y="${y}" width="${barW}" height="${height}" rx="2" fill="${color}" opacity="0.85" />`;
+  // Split the line at failed polls so a null does not draw a false dip to zero.
+  const segments = [];
+  let segment = [];
+  hist.forEach((ms, i) => {
+    if (Number.isFinite(ms)) {
+      segment.push(`${xAt(i).toFixed(1)},${yAt(ms).toFixed(1)}`);
+    } else if (segment.length) {
+      segments.push(segment);
+      segment = [];
+    }
+  });
+  if (segment.length) segments.push(segment);
+
+  const lines = segments.filter(seg => seg.length > 1).map(seg =>
+    `<polyline points="${seg.join(' ')}" fill="none" stroke="${cssVar('--muted')}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />`
+  ).join('');
+  const dots = hist.map((ms, i) => Number.isFinite(ms)
+    ? `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(ms).toFixed(1)}" r="2.5" fill="${latencyColor(ms)}"><title>${ms}ms</title></circle>`
+    : ''
+  ).join('');
+
+  const grid = latencyTicks(axisMax).map(ms => {
+    const y = yAt(ms).toFixed(1);
+    return `<line x1="${LEFT}" x2="${W - RIGHT}" y1="${y}" y2="${y}" stroke="${cssVar('--border')}" stroke-width="1" />` +
+      `<text x="${LEFT - 4}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="${cssVar('--muted')}">${ms}ms</text>`;
   }).join('');
 
-  container.innerHTML = `<svg width="${svgW}" height="${H}" style="display:block">${bars}</svg>`;
+  container.innerHTML = `<svg width="${W}" height="${H}" style="display:block">${grid}${lines}${dots}</svg>`;
 }
 
 function loadPlotly(onLoad) {
@@ -176,8 +224,7 @@ function renderPlotlyChartFor(container, hist) {
     plotlyRendered.add(container);
   }
   const x = hist.map((_, i) => i);
-  // 50 = the SVG renderer's minimum bar (4px on a 64px chart, scaled to the [0,800] axis); every bar gets at least this
-  const y = hist.map(ms => ms === null ? 50 : Math.max(50, ms));
+  const y = hist.map(ms => Number.isFinite(ms) ? ms : null);
   const customdata = hist.map(ms => ms === null ? '–' : ms + 'ms');
   const colors = plotlyColorMap();
   const markerColor = hist.map(ms => {
@@ -188,19 +235,32 @@ function renderPlotlyChartFor(container, hist) {
     x: x,
     y: y,
     customdata: customdata,
-    marker: { color: markerColor },
+    mode: 'lines+markers',
+    line: { color: colors['var(--muted)'] || '#64748b', width: 1.5 },
+    marker: { color: markerColor, size: 4 },
+    connectgaps: false,
     hovertemplate: '%{customdata}<extra></extra>',
-    type: 'bar'
+    type: 'scatter'
   }];
+  const axisMax = latencyAxisMax(hist);
+  const ticks = latencyTicks(axisMax);
   const layout = {
     height: 64,
-    margin: { t: 4, r: 4, b: 4, l: 30 },
+    margin: { t: 4, r: 4, b: 4, l: 38 },
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
     font: { color: cssVar('--muted') || '#64748b', size: 10 },
     xaxis: { showgrid: false, zeroline: false, showticklabels: false },
-    yaxis: { range: [0, MAX_LATENCY_DISPLAY_MS], showgrid: true, gridcolor: 'rgba(100,116,139,0.15)', zeroline: false },
-    bargap: 0.25
+    yaxis: {
+      range: [0, axisMax],
+      tickmode: 'array',
+      tickvals: ticks,
+      ticktext: ticks.map(ms => `${ms}ms`),
+      tickfont: { size: 9 },
+      showgrid: true,
+      gridcolor: 'rgba(100,116,139,0.15)',
+      zeroline: false
+    }
   };
   const config = { displayModeBar: false, responsive: true };
   Plotly.react(container, data, layout, config);
