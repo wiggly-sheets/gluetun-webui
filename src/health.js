@@ -8,6 +8,28 @@ const IPV6_STALE_MS = 15 * 60 * 1000;
 // --- Helper: strip VPN credentials from settings before sending to the browser ---
 // Gluetun's /v1/vpn/settings includes private keys, pre-shared keys and OpenVPN
 // credentials. The UI only needs protocol, provider name and server selection.
+function sanitizeAirVpnSession(session, server = null) {
+  return {
+    device_name: session.device_name,
+    vpn_ip: session.vpn_ip,
+    exit_ip: session.exit_ip,
+    server_name: session.server_name,
+    server_country: session.server_country,
+    server_location: session.server_location,
+    connected_since_date: session.connected_since_date,
+    bytes_read: session.bytes_read,
+    bytes_write: session.bytes_write,
+    speed_read: session.speed_read,
+    speed_write: session.speed_write,
+    server_health: server?.health,
+    server_warning: server?.warning,
+    server_load: server?.currentload,
+    server_bw: server?.bw,
+    server_bw_max: server?.bw_max,
+    server_users: server?.users,
+  };
+}
+
 function sanitizeVpnSettings(data) {
   if (!data || typeof data !== 'object') return data;
   const ss = data.provider?.server_selection || {};
@@ -159,15 +181,30 @@ function createHealthService({ fetchGluetun, fetchImpl = (...args) => fetch(...a
       : null;
     const publicIpv6 = cachedIpv6 ? { ok: true, data: cachedIpv6 } : { ok: false, error: 'Not available' };
 
-    let airVpnServer = null;
-    let airVpnUserInfo = null;
+    // The API reports every AirVPN session on the account. Match this instance's tunnel by
+    // exit IP; a session from another device stays in airVpnSessions and never claims to be local.
+    const localExitIp = publicIp.ok ? publicIp.data?.public_ip : null;
+    const rawSessions = airVpnUserinfo.ok
+      ? (Array.isArray(airVpnUserinfo.data?.sessions)
+          ? airVpnUserinfo.data.sessions
+          : airVpnUserinfo.data?.connection ? [airVpnUserinfo.data.connection] : [])
+      : [];
+    const airVpnServers = new Map(
+      (airVpnStatus.ok ? airVpnStatus.data?.servers || [] : []).map(server => [server.public_name, server])
+    );
+    const sessions = rawSessions
+      .filter(Boolean)
+      .map(session => sanitizeAirVpnSession(session, airVpnServers.get(session.server_name)))
+      .filter(session => session.exit_ip || session.server_name);
+    const localSession = localExitIp ? sessions.find(session => session.exit_ip === localExitIp) || null : null;
 
-    // Match current server by userinfo session server_name; if that fails (renamed/stale server),
-    // fall back to the vpnSettings server name instead of hiding the card
+    let airVpnServer = null;
+    // Match the local session's server; fall back to the vpnSettings name when AirVPN does not
+    // report this instance as connected yet.
     if (airVpnStatus.ok && airVpnStatus.data?.servers) {
       const servers = airVpnStatus.data.servers;
       const candidates = [
-        airVpnUserinfo.ok ? airVpnUserinfo.data?.connection?.server_name : null,
+        localSession?.server_name,
         vpnSettings?.ok ? vpnSettings.data?.provider?.server_selection?.names?.[0] : null,
       ];
       for (const name of candidates) {
@@ -177,10 +214,10 @@ function createHealthService({ fetchGluetun, fetchImpl = (...args) => fetch(...a
       }
     }
 
-    // Privacy: only expose the userinfo connection field to the browser (no login/credits/sessions)
-    if (airVpnUserinfo.ok) {
-      airVpnUserInfo = { connection: airVpnUserinfo.data?.connection ?? null };
-    }
+    const airVpnUserInfo = localSession
+      ? { ok: true, data: { connection: localSession } }
+      : { ok: false, error: 'No session for this instance' };
+    const airVpnSessions = sessions.filter(session => session !== localSession);
 
     // Generic provider card: match the connected server against the provider's live list
     let providerData = null;
@@ -216,7 +253,8 @@ function createHealthService({ fetchGluetun, fetchImpl = (...args) => fetch(...a
         ? { ok: true, data: sanitizeVpnSettings(vpnSettings.data) }
         : vpnSettings,
       airVpnServer: airVpnServer ? { ok: true, data: airVpnServer } : { ok: false },
-      airVpnUserInfo: airVpnUserInfo ? { ok: true, data: airVpnUserInfo } : { ok: false },
+      airVpnUserInfo,
+      airVpnSessions,
       providerData,
       allFailed,
     };

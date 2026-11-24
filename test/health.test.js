@@ -84,3 +84,44 @@ test('invalidate discards an in-flight batch instead of caching it', async () =>
   await service.getHealth(instance);
   assert.equal(calls.filter(c => c === '/v1/vpn/status').length, 2);
 });
+
+test('AirVPN sessions are split into local and other by exit IP', async () => {
+  const airInstance = { ...instance, id: 'air', airVpnApiKey: 'test-key' };
+  const fetchImplFor = exitIp => async url => {
+    if (url.startsWith('https://api6.ipify.org')) {
+      return { ok: true, json: async () => ({ ip: '2001:db8::1' }) };
+    }
+    if (url.includes('service=status')) {
+      return { ok: true, json: async () => ({ servers: [{ public_name: 'Athebyne', health: 'ok', currentload: 42, bw: 1000, bw_max: 2000, users: 17 }] }) };
+    }
+    if (url.includes('service=userinfo')) {
+      return {
+        ok: true,
+        json: async () => ({ connection: { device_name: 'Raspberry Pi', server_name: 'Athebyne', exit_ip: exitIp } }),
+      };
+    }
+    throw new Error(`unexpected ${url}`);
+  };
+
+  const matching = createHealthService({
+    fetchGluetun: fakeGluetun().fetchGluetun,
+    fetchImpl: fetchImplFor('203.0.113.5'),
+    now: () => 1000,
+  });
+  const mismatching = createHealthService({
+    fetchGluetun: fakeGluetun().fetchGluetun,
+    fetchImpl: fetchImplFor('198.51.100.9'),
+    now: () => 1000,
+  });
+
+  const local = await matching.getHealth(airInstance);
+  assert.equal(local.airVpnUserInfo.data.connection.device_name, 'Raspberry Pi');
+  assert.equal(local.airVpnSessions.length, 0);
+
+  const remote = await mismatching.getHealth(airInstance);
+  assert.equal(remote.airVpnUserInfo.ok, false);
+  assert.equal(remote.airVpnSessions.length, 1);
+  assert.equal(remote.airVpnSessions[0].device_name, 'Raspberry Pi');
+  assert.equal(remote.airVpnSessions[0].server_users, 17);
+  assert.equal(remote.airVpnSessions[0].server_load, 42);
+});

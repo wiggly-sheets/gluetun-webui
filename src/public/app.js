@@ -468,13 +468,14 @@ const CARD_MODULES = {
 
   airvpn: {
     mount: id => `
-      <div class="card card-wide airvpn-card" id="i${id}-airvpn-card">
+      <div class="card card-wide airvpn-card" data-card-id="airvpn" id="i${id}-airvpn-card">
         <div class="card-header">
           <span class="card-icon">&#127758;</span>
-          <h3>AirVPN Server</h3>
+          <h3>AirVPN Account</h3>
           <span id="i${id}-airvpn-server-name" class="badge ok"></span>
         </div>
         <div class="card-body">
+          <div class="stat-row"><span class="stat-label">Device</span><span class="stat-value" id="i${id}-airvpn-device">–</span></div>
           <div class="stat-row"><span class="stat-label">Health</span><span class="stat-value" id="i${id}-airvpn-health">–</span></div>
           <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value" id="i${id}-airvpn-load">–</span></div>
           <div class="stat-row"><span class="stat-label">Bandwidth</span><span class="stat-value mono" id="i${id}-airvpn-bw">–</span></div>
@@ -506,6 +507,7 @@ const CARD_MODULES = {
       if (nameBadge) nameBadge.className = s.health === 'ok' ? 'badge ok' : 'badge warn';
 
       const conn = airVpnUserInfo?.ok ? airVpnUserInfo.data?.connection : null;
+      setEl(`i${id}-airvpn-device`, conn?.device_name || '–');
       if (conn) {
         const read = conn.bytes_read || 0;
         const write = conn.bytes_write || 0;
@@ -523,9 +525,61 @@ const CARD_MODULES = {
     clear: id => document.getElementById(`i${id}-airvpn-card`)?.classList.remove('visible'),
   },
 
+  otherSessions: {
+    mount: id => `
+      <div class="card card-wide other-sessions-card" data-card-id="otherSessions" id="i${id}-other-sessions-card">
+        <div class="card-header">
+          <span class="card-icon">&#128241;</span>
+          <h3>Other AirVPN Sessions</h3>
+          <span id="i${id}-other-sessions-count" class="badge warn"></span>
+        </div>
+        <div class="card-body" id="i${id}-other-sessions-body"></div>
+      </div>`,
+    update: (id, ctx) => {
+      const card = document.getElementById(`i${id}-other-sessions-card`);
+      const body = document.getElementById(`i${id}-other-sessions-body`);
+      if (!card || !body) return;
+      const sessions = Array.isArray(ctx.health.airVpnSessions) ? ctx.health.airVpnSessions : [];
+      if (sessions.length === 0) {
+        card.classList.remove('visible');
+        return;
+      }
+      card.classList.add('visible');
+      setEl(`i${id}-other-sessions-count`, String(sessions.length));
+      body.innerHTML = sessions.map(session => {
+        const location = [session.server_location, session.server_country].filter(Boolean).join(', ');
+        const read = formatBytes(session.bytes_read || 0);
+        const write = formatBytes(session.bytes_write || 0);
+        const speed = `${formatBytes(session.speed_read || 0)}/s ↑ / ${formatBytes(session.speed_write || 0)}/s ↓`;
+        const health = session.server_health === 'ok' ? 'OK' : (session.server_warning || session.server_health || '–');
+        const load = session.server_load !== undefined ? `${session.server_load}%` : '–';
+        const bw = session.server_bw !== undefined && session.server_bw_max !== undefined
+          ? `${session.server_bw}/${session.server_bw_max} Mbps` : '–';
+        const users = session.server_users !== undefined ? String(session.server_users) : '–';
+        return `
+          <div class="session-row">
+            <div class="session-head">
+              <span class="session-device">${escHtml(session.device_name || 'Unknown device')}</span>
+              <span class="badge ${session.server_health === 'ok' ? 'ok' : 'warn'}">${escHtml(session.server_name || '–')}</span>
+            </div>
+            <div class="stat-row"><span class="stat-label">Health</span><span class="stat-value">${escHtml(health)}</span></div>
+            <div class="stat-row"><span class="stat-label">Load</span><span class="stat-value">${load}</span></div>
+            <div class="stat-row"><span class="stat-label">Bandwidth</span><span class="stat-value mono">${bw}</span></div>
+            <div class="stat-row"><span class="stat-label">Users</span><span class="stat-value">${users}</span></div>
+            <div class="stat-row"><span class="stat-label">Location</span><span class="stat-value">${escHtml(location || '–')}</span></div>
+            <div class="stat-row"><span class="stat-label">Exit IP</span><span class="stat-value mono">${escHtml(session.exit_ip || '–')}</span></div>
+            <div class="stat-row"><span class="stat-label">Transferred</span><span class="stat-value mono">${read} ↑ / ${write} ↓</span></div>
+            <div class="stat-row"><span class="stat-label">Speed</span><span class="stat-value mono">${speed}</span></div>
+            <div class="stat-row"><span class="stat-label">Connected</span><span class="stat-value">${escHtml(session.connected_since_date || '–')}</span></div>
+          </div>`;
+      }).join('');
+    },
+    clear: id => document.getElementById(`i${id}-other-sessions-card`)?.classList.remove('visible'),
+  },
+
   provider: {
     mount: id => `
-      <div class="card card-wide provider-card" id="i${id}-provider-card">
+      <div class="card card-wide provider-card" data-card-id="provider" id="i${id}-provider-card">
         <div class="card-header">
           <span class="card-icon">&#127760;</span>
           <h3>Provider Server</h3>
@@ -738,6 +792,7 @@ function updatePanel(inst, health) {
   CARD_MODULES.dns.update(id, ctx);
   CARD_MODULES.history.update(id, ctx);
   CARD_MODULES.airvpn.update(id, ctx);
+  CARD_MODULES.otherSessions.update(id, ctx);
   CARD_MODULES.provider.update(id, ctx);
 }
 
@@ -754,7 +809,7 @@ function updatePanelError(inst) {
   if (banner) banner.className = 'status-banner unknown';
   setEl(`i${id}-banner-title`, 'Status Unknown');
   setEl(`i${id}-banner-sub`, 'Could not reach Gluetun control API');
-  ['ip', 'vpn', 'port', 'dns', 'history', 'airvpn', 'provider'].forEach(name => {
+  ['ip', 'vpn', 'port', 'dns', 'history', 'airvpn', 'otherSessions', 'provider'].forEach(name => {
     CARD_MODULES[name].clear(id);
   });
 }
