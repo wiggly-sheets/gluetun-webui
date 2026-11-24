@@ -446,7 +446,7 @@ const CARD_MODULES = {
 
   latency: {
     mount: id => latencyChartEnabled ? `
-      <div class="card card-wide">
+      <div class="card card-wide" data-card-id="latency">
         <div class="card-header">
           <span class="card-icon">&#9889;</span>
           <h3>Latency (last 30 polls)</h3>
@@ -1111,7 +1111,8 @@ if (intervalValue !== null) {
 }
 // ---- Edit Mode ----
 
-const CARD_IDS = ['ip', 'vpn', 'port', 'dns', 'history'];
+const CARD_IDS = ['ip', 'vpn', 'port', 'dns', 'history', 'latency', 'airvpn', 'provider', 'otherSessions'];
+const WIDE_CARDS = new Set(['history', 'latency', 'airvpn', 'provider', 'otherSessions']);
 let editMode = false;
 let dragSrcCard = null;
 const dragBoundGrids = new WeakSet();
@@ -1121,7 +1122,9 @@ const serversRetryAt = new Map();
 function layoutKey(instId) { return `gluetun_layout_${instId}`; }
 
 function defaultLayout() {
-  return { order: [...CARD_IDS], sizes: { history: 4 }, hidden: [] };
+  const sizes = {};
+  CARD_IDS.forEach(cid => { sizes[cid] = WIDE_CARDS.has(cid) ? 4 : 1; });
+  return { order: [...CARD_IDS], sizes, heights: {}, hidden: [] };
 }
 
 function sanitizeLayout(raw) {
@@ -1129,12 +1132,16 @@ function sanitizeLayout(raw) {
   const order = [...new Set((Array.isArray(raw.order) ? raw.order : []).filter(cid => valid.has(cid)))];
   const hidden = [...new Set((Array.isArray(raw.hidden) ? raw.hidden : []).filter(cid => valid.has(cid)))];
   const sizes = {};
+  const heights = {};
   const rawSizes = raw.sizes && typeof raw.sizes === 'object' && !Array.isArray(raw.sizes) ? raw.sizes : {};
+  const rawHeights = raw.heights && typeof raw.heights === 'object' && !Array.isArray(raw.heights) ? raw.heights : {};
   CARD_IDS.forEach(cid => {
     const n = Number(rawSizes[cid]);
-    sizes[cid] = Number.isFinite(n) && n > 0 ? Math.min(4, Math.max(1, Math.floor(n))) : 1;
+    sizes[cid] = Number.isFinite(n) && n > 0 ? Math.min(4, Math.max(1, Math.floor(n))) : (WIDE_CARDS.has(cid) ? 4 : 1);
+    const h = Number(rawHeights[cid]);
+    heights[cid] = Number.isFinite(h) && h > 0 ? Math.min(1200, Math.max(120, Math.round(h))) : null;
   });
-  return { order, hidden, sizes };
+  return { order, hidden, sizes, heights };
 }
 
 function loadLayout(instId) {
@@ -1172,6 +1179,7 @@ function applyLayout(instId) {
     const span = layout.sizes[cid] || 1;
     const numCols = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
     card.style.gridColumn = span >= numCols ? '1 / -1' : `span ${span}`;
+    card.style.height = layout.heights[cid] ? `${layout.heights[cid]}px` : '';
     // card-wide class is just for initial default, override with explicit span
     card.classList.toggle('card-wide', false);
   });
@@ -1235,6 +1243,8 @@ function startResize(e, instId, cid) {
   if (!card) return;
 
   const startX = e.clientX;
+  const startY = e.clientY;
+  const startHeight = card.getBoundingClientRect().height;
   const gridRect = grid.getBoundingClientRect();
   const parentRect = grid.parentElement.getBoundingClientRect();
   const numCols = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
@@ -1243,7 +1253,7 @@ function startResize(e, instId, cid) {
   const startSpan = loadLayout(instId).sizes[cid] || 1;
 
   card.classList.add('resizing');
-  document.body.style.cursor = 'col-resize';
+  document.body.style.cursor = 'nwse-resize';
   document.body.style.userSelect = 'none';
 
   // Create grid overlay
@@ -1264,12 +1274,15 @@ function startResize(e, instId, cid) {
   grid.parentElement.appendChild(overlay);
 
   let activeSpan = startSpan;
+  let activeHeight = startHeight;
 
   function onMove(ev) {
     const delta = ev.clientX - startX;
     const spanDelta = Math.round(delta / colWidth);
     activeSpan = Math.max(1, Math.min(numCols, startSpan + spanDelta));
     card.style.gridColumn = activeSpan >= numCols ? '1 / -1' : `span ${activeSpan}`;
+    activeHeight = Math.max(120, Math.round(startHeight + ev.clientY - startY));
+    card.style.height = `${activeHeight}px`;
     // Highlight active columns in overlay
     overlay.querySelectorAll('.grid-col-guide').forEach((col, i) => {
       col.style.background = i < activeSpan ? 'rgba(74,222,128,0.08)' : '';
@@ -1287,6 +1300,7 @@ function startResize(e, instId, cid) {
 
     const layout = loadLayout(instId);
     layout.sizes[cid] = activeSpan;
+    layout.heights[cid] = activeHeight;
     saveLayout(instId, layout);
     applyLayout(instId);
   }
@@ -1352,7 +1366,7 @@ function renderVisibilityPanel(instId) {
   if (!editMode) { panel.style.display = 'none'; return; }
   panel.style.display = '';
   const layout = loadLayout(instId);
-  const labels = { ip: 'Public IP', vpn: 'VPN Connection', port: 'Port Forwarding', dns: 'DNS', history: 'History' };
+  const labels = { ip: 'Public IP', vpn: 'VPN Connection', port: 'Port Forwarding', dns: 'DNS', history: 'History', latency: 'Latency', airvpn: 'AirVPN Account', provider: 'Provider Server', otherSessions: 'Other Sessions' };
   panel.innerHTML = CARD_IDS.map(cid => {
     const vis = !layout.hidden.includes(cid);
     return `<label class="vis-toggle"><input type="checkbox" data-vis-cid="${cid}" ${vis ? 'checked' : ''}> ${labels[cid]}</label>`;

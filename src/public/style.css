@@ -148,6 +148,7 @@ main {
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  align-items: start;
   gap: 1rem;
 }
 
@@ -193,13 +194,31 @@ main {
 .card-wide { grid-column: 1 / -1; }
 
 /* ---- AirVPN card ---- */
-.airvpn-card { display: none; }
-.airvpn-card.visible { display: block; }
+.card.airvpn-card { display: none; }
+.card.airvpn-card.visible { display: flex; }
 .airvpn-card .badge { margin-left: auto; }
 
+/* ---- Other AirVPN sessions ---- */
+.card.other-sessions-card { display: none; }
+.card.other-sessions-card.visible { display: flex; }
+.other-sessions-card .badge { margin-left: auto; }
+.session-row {
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border);
+}
+.session-row:first-child { padding-top: 0; border-top: 0; }
+.session-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+.session-device { flex: 1; }
+
 /* ---- Generic provider card (NordVPN / Mullvad / Privado) ---- */
-.provider-card { display: none; }
-.provider-card.visible { display: block; }
+.card.provider-card { display: none; }
+.card.provider-card.visible { display: flex; }
 .provider-card .badge { margin-left: auto; }
 
 /* ---- Cards ---- */
@@ -209,11 +228,14 @@ main {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   transition: border-color 0.3s;
 }
 .card-header {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 0.6rem;
   padding: 0.85rem 1.1rem;
   border-bottom: 1px solid var(--border);
@@ -238,7 +260,7 @@ main {
 .badge.error { background: rgba(248,113,113,0.15); color: var(--red);   border-color: var(--red); }
 .badge.warn  { background: rgba(250,204,21,0.15);  color: var(--yellow);border-color: var(--yellow); }
 
-.card-body { padding: 0.85rem 1.1rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.card-body { padding: 0.85rem 1.1rem; display: flex; flex-direction: column; gap: 0.6rem; flex: 1 1 auto; min-height: 0; overflow: auto; }
 
 .stat-row {
   display: flex;
@@ -387,10 +409,10 @@ main.hidden { display: none; }
   position: absolute;
   bottom: 0;
   right: 0;
-  width: 14px;
-  height: 100%;
-  background: transparent;
-  cursor: col-resize;
+  width: 18px;
+  height: 18px;
+  background: linear-gradient(135deg, transparent 50%, var(--border) 50%);
+  cursor: nwse-resize;
   z-index: 2;
 }
 .resize-handle:hover { background: rgba(74,222,128,0.15); }
