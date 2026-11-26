@@ -41,7 +41,7 @@ jobs:
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha,prefix={{branch}}-,enable=${{ github.ref_type == 'branch' }}
             type=raw,value=latest
 
       - name: Build and push
