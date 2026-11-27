@@ -85,6 +85,40 @@ test('invalidate discards an in-flight batch instead of caching it', async () =>
   assert.equal(calls.filter(c => c === '/v1/vpn/status').length, 2);
 });
 
+test('AirVPN stale session for the same device is not listed as another session', async () => {
+  const airInstance = { ...instance, id: 'air-stale', airVpnApiKey: 'test-key' };
+  const fetchImpl = async url => {
+    if (url.startsWith('https://api6.ipify.org')) {
+      return { ok: true, json: async () => ({ ip: '2001:db8::1' }) };
+    }
+    if (url.includes('service=status')) {
+      return { ok: true, json: async () => ({ servers: [] }) };
+    }
+    if (url.includes('service=userinfo')) {
+      return {
+        ok: true,
+        json: async () => ({
+          sessions: [
+            { device_name: 'Macbook', server_name: 'Tarazed', exit_ip: '203.0.113.5', vpn_ip: '10.0.0.1' },
+            { device_name: 'Macbook', server_name: 'Situla', exit_ip: '203.0.113.99', vpn_ip: '10.0.0.1' },
+            { device_name: 'Raspberry Pi', server_name: 'Praecipua', exit_ip: '203.0.113.7', vpn_ip: '10.0.0.2' },
+          ],
+        }),
+      };
+    }
+    throw new Error(`unexpected ${url}`);
+  };
+  const service = createHealthService({
+    fetchGluetun: fakeGluetun().fetchGluetun,
+    fetchImpl,
+    now: () => 1000,
+  });
+
+  const health = await service.getHealth(airInstance);
+  assert.equal(health.airVpnUserInfo.data.connection.server_name, 'Tarazed');
+  assert.deepEqual(health.airVpnSessions.map(s => s.device_name), ['Raspberry Pi']);
+});
+
 test('AirVPN sessions are split into local and other by exit IP', async () => {
   const airInstance = { ...instance, id: 'air', airVpnApiKey: 'test-key' };
   const fetchImplFor = exitIp => async url => {

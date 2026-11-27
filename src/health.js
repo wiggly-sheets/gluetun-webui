@@ -217,7 +217,12 @@ function createHealthService({ fetchGluetun, fetchImpl = (...args) => fetch(...a
     const airVpnUserInfo = localSession
       ? { ok: true, data: { connection: localSession } }
       : { ok: false, error: 'No session for this instance' };
-    const airVpnSessions = sessions.filter(session => session !== localSession);
+    // AirVPN can keep a stale session for the same device (same vpn_ip, old exit IP) until it
+    // expires. Hide every session sharing this device's vpn_ip, not only the exact match.
+    const airVpnSessions = sessions.filter(session =>
+      session !== localSession &&
+      !(localSession?.vpn_ip && session.vpn_ip === localSession.vpn_ip)
+    );
 
     // Generic provider card: match the connected server against the provider's live list
     let providerData = null;
